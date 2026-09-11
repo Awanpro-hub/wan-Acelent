@@ -111,6 +111,7 @@ var state = {
   selectedDate: todayKey(),
   trackerTab: "today",
   quickAddMode: "log",
+  calendarOpen: false,
 };
 var unsubs = [];
 function clearSubs() {
@@ -439,40 +440,56 @@ function renderQuota() {
     .join("");
 
   return (
-    '<div class="quota-row">' +
-    '<div class="quota-card">' +
-    '<div class="q-label">今日有效聯絡 · 第一把 10+3+1</div>' +
+    '<div class="panel today-summary">' +
+    '<div class="ts-row">' +
+    '<div class="ts-stat">' +
+    '<div class="q-label">今日有效聯絡</div>' +
     '<div class="q-num">' +
     totalLogs +
     " <small>/ 10</small></div>" +
-    '<div class="q-sub">4 消費型・3 有狀態・2 一二課・1 陌生</div>' +
     '<div class="q-bar">' +
     barsHtml +
     "</div></div>" +
-    '<div class="quota-card">' +
-    '<div class="q-label">今日約會 · 第二把 1+1+1</div>' +
+    '<div class="ts-div"></div>' +
+    '<div class="ts-stat">' +
+    '<div class="q-label">今日約會</div>' +
     '<div class="q-num">' +
     apptCount +
     " <small>/ 3</small></div>" +
-    '<div class="q-sub">主要・次要・有狀態，各一位</div>' +
     '<div class="q-dots">' +
     dotsHtml +
     "</div></div>" +
-    '<div class="quota-card">' +
-    '<div class="q-label">本週新識陌生人</div>' +
+    '<div class="ts-div"></div>' +
+    '<div class="ts-stat">' +
+    '<div class="q-label">本週新朋友</div>' +
     '<div class="q-num">' +
     weekStrangers +
     " <small>/ 1</small></div>" +
-    '<div class="q-sub">每週至少認識一位新朋友</div>' +
     '<div class="q-bar"><div class="seg"><i style="width:' +
     Math.min(100, weekStrangers * 100) +
     '%;background:var(--accent)"></i></div></div>' +
+    "</div>" +
     "</div></div>"
   );
 }
 
 /* ===================== calendar ===================== */
 function renderCalendar() {
+  var dateChip =
+    fmtDateHuman(state.selectedDate) + (state.selectedDate === todayKey() ? "（今天）" : "");
+
+  if (!state.calendarOpen) {
+    return (
+      '<div class="panel"><div class="cal-compact-row">' +
+      '<div><div class="cal-compact-label">選取日期</div>' +
+      '<div class="cal-compact-date">' +
+      dateChip +
+      "</div></div>" +
+      '<button type="button" class="btn btn-ghost btn-sm" id="cal-toggle">📅 選擇其他日期</button>' +
+      "</div></div>"
+    );
+  }
+
   var y = state.calYear,
     m = state.calMonth;
   var first = new Date(y, m, 1);
@@ -523,6 +540,9 @@ function renderCalendar() {
 
   return (
     '<div class="panel">' +
+    '<div class="cal-open-head"><div class="cal-compact-label">選取日期：' +
+    dateChip +
+    '</div><button type="button" class="btn btn-ghost btn-sm" id="cal-toggle">收合 ▲</button></div>' +
     '<div class="cal-nav">' +
     '<button class="btn btn-ghost btn-sm" id="cal-prev">← 上個月</button>' +
     '<div class="ym">' +
@@ -727,11 +747,7 @@ function renderContactsView() {
         list.length +
         ' 人</span></div><div class="g-body">' +
         rows +
-        '</div><form class="g-add" data-add-to="' +
-        g.id +
-        '" data-group-name="' +
-        esc(g.name) +
-        '"><input type="text" placeholder="新增姓名" maxlength="20" required /><button class="btn btn-accent btn-sm" type="submit">新增</button></form></div>'
+        "</div></div>"
       );
     })
     .join("");
@@ -868,25 +884,6 @@ function wireEvents() {
           showToast(friendlyAuthError(err));
         }
       });
-    app.querySelectorAll("[data-add-to]").forEach(function (form) {
-      form.addEventListener("submit", async function (e) {
-        e.preventDefault();
-        var input = form.querySelector("input");
-        var name = input.value.trim();
-        if (!name) return;
-        try {
-          await client.models.Contact.create({
-            name: name,
-            groupId: form.getAttribute("data-add-to"),
-            groupName: form.getAttribute("data-group-name"),
-          });
-          input.value = "";
-          showToast("已加入「" + form.getAttribute("data-group-name") + "」");
-        } catch (err) {
-          showToast(friendlyAuthError(err));
-        }
-      });
-    });
     var agf = document.getElementById("add-group-form");
     if (agf)
       agf.addEventListener("submit", async function (e) {
@@ -912,6 +909,13 @@ function wireEvents() {
       });
     });
 
+    var calToggle = document.getElementById("cal-toggle");
+    if (calToggle)
+      calToggle.addEventListener("click", function () {
+        state.calendarOpen = !state.calendarOpen;
+        render();
+      });
+
     var prev = document.getElementById("cal-prev");
     var next = document.getElementById("cal-next");
     if (prev)
@@ -935,6 +939,7 @@ function wireEvents() {
     app.querySelectorAll(".cal-cell:not(.blank)").forEach(function (cell) {
       cell.addEventListener("click", function () {
         state.selectedDate = cell.getAttribute("data-date");
+        state.calendarOpen = false;
         render();
       });
     });

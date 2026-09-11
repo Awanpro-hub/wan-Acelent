@@ -205,8 +205,6 @@
   .contact-row:hover .x-del{opacity:1;}
   .contact-row .x-del:hover{color:var(--danger); background:var(--type-primary-soft);}
   .empty-hint{color:var(--ink-faint); font-size:13px; padding:10px 8px;}
-  .g-add{display:flex; gap:6px; padding:10px 12px; border-top:1px solid var(--border);}
-  .g-add input{flex:1; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--ink); font-size:13.5px;}
   .add-group-card{
     border:1.5px dashed var(--border); border-radius:16px; display:flex; align-items:center; justify-content:center;
     min-height:120px; background:transparent;
@@ -215,11 +213,17 @@
   .add-group-card input{flex:1; padding:9px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--ink);}
 
   /* ---------- tracker view ---------- */
-  .quota-row{display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:14px; margin-bottom:24px;}
-  .quota-card{background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:18px 18px 16px; box-shadow:var(--shadow);}
-  .quota-card .q-label{font-size:12.5px; font-weight:700; color:var(--ink-soft); letter-spacing:.03em; margin-bottom:8px; text-transform:uppercase;}
-  .quota-card .q-num{font-family:"Noto Serif TC",serif; font-size:30px; font-weight:700; line-height:1;}
-  .quota-card .q-num small{font-size:16px; font-weight:600; color:var(--ink-faint);}
+  .today-summary{margin-bottom:24px; padding:18px 20px;}
+  .ts-row{display:flex; align-items:stretch; gap:20px;}
+  .ts-stat{flex:1; min-width:0;}
+  .ts-div{width:1px; background:var(--border); flex:none;}
+  @media (max-width: 640px){
+    .ts-row{flex-direction:column; gap:16px;}
+    .ts-div{width:100%; height:1px;}
+  }
+  .q-label{font-size:12.5px; font-weight:700; color:var(--ink-soft); letter-spacing:.03em; margin-bottom:8px; text-transform:uppercase;}
+  .q-num{font-family:"Noto Serif TC",serif; font-size:28px; font-weight:700; line-height:1;}
+  .q-num small{font-size:15px; font-weight:600; color:var(--ink-faint);}
   .q-sub{font-size:12.5px; color:var(--ink-faint); margin-top:4px;}
   .q-bar{display:flex; gap:4px; margin-top:12px;}
   .q-bar .seg{flex:1; height:7px; border-radius:5px; background:var(--surface-2); overflow:hidden; position:relative;}
@@ -236,6 +240,11 @@
   .panel h3{font-size:15px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between;}
   .panel h3 .hint{font-size:12px; color:var(--ink-faint); font-weight:500;}
 
+  .cal-compact-row{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+  .cal-compact-label{font-size:12px; color:var(--ink-faint); font-weight:700; text-transform:uppercase; letter-spacing:.03em;}
+  .cal-compact-date{font-size:17px; font-weight:700; font-family:"Noto Serif TC",serif; margin-top:2px;}
+  .cal-open-head{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;}
+  .cal-open-head .cal-compact-label{margin-bottom:0;}
   .cal-nav{display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;}
   .cal-nav .ym{font-weight:700; font-size:15px;}
   .cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:5px;}
