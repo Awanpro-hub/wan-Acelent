@@ -457,6 +457,10 @@ function renderSignUp() {
       '<div><label class="field-label" for="su-pw">密碼</label>' +
       '<div class="pw-wrap"><input class="text-input" id="su-pw" type="password" required minlength="8" autocomplete="new-password" placeholder="至少 8 碼，需有英文字母與數字" />' +
       '<button type="button" class="pw-toggle" data-toggle-pw="su-pw" title="顯示/隱藏密碼">👁</button></div></div>' +
+      '<div class="agree-row">' +
+      '<input type="checkbox" id="su-agree" required />' +
+      '<label for="su-agree">我已閱讀並同意<button type="button" id="view-privacy" class="link-btn">隱私權政策</button></label>' +
+      "</div>" +
       '<div class="field-error" id="su-err"></div>' +
       '<button type="submit" class="btn btn-accent btn-block">註冊</button>' +
       "</form>" +
@@ -467,8 +471,13 @@ function renderSignUp() {
     e.preventDefault();
     var email = document.getElementById("su-email").value.trim();
     var pw = document.getElementById("su-pw").value;
+    var agreed = document.getElementById("su-agree").checked;
     var errEl = document.getElementById("su-err");
     errEl.textContent = "";
+    if (!agreed) {
+      errEl.textContent = "請先閱讀並勾選同意隱私權政策，才能註冊。";
+      return;
+    }
     try {
       await signUp({
         username: email,
@@ -485,6 +494,33 @@ function renderSignUp() {
   });
   document.getElementById("go-signin").addEventListener("click", function () {
     state.authScreen = "signin";
+    render();
+  });
+  document.getElementById("view-privacy").addEventListener("click", function () {
+    state.authScreen = "privacy";
+    render();
+  });
+}
+
+function renderPrivacyPolicy() {
+  var app = document.getElementById("app");
+  app.innerHTML =
+    '<div id="login-screen"><div class="login-card" style="max-width:560px;">' +
+    '<div class="login-mark">🦈</div>' +
+    "<h1>隱私權政策</h1>" +
+    '<div class="privacy-body">' +
+    "<p><b>1. 誰在蒐集這些資料</b><br/>「鯊魚日常」由帶你使用這個工具的管理者建置與維運，不隸屬於任何特定公司系統。</p>" +
+    "<p><b>2. 蒐集目的</b><br/>提供會員身分驗證、10-3-1 每日聯絡與工作規劃追蹤等功能，僅供內部團隊管理個人業務活動使用，不做其他行銷用途。</p>" +
+    "<p><b>3. 會蒐集哪些資料</b><br/>帳號資訊(Email、密碼、你自訂的顯示名稱)；你在「分類名單」中輸入的聯絡人姓名與分類；你新增的聯絡記錄與工作規劃內容(含備註)。</p>" +
+    "<p><b>4. 保存期間、地區、對象與方式</b><br/>資料會保存到你刪除該筆資料或帳號為止；儲存於 AWS 雲端伺服器(亞太地區)；僅供你本人查看，不會提供給第三人或用於行銷，以電子化方式處理與傳輸。</p>" +
+    "<p><b>5. 你的權利</b><br/>你可以隨時在 App 內刪除聯絡人、聯絡記錄或工作規劃；如需查詢、更正、刪除帳號整體資料或有任何疑問，請聯絡邀請你使用本工具的管理者。</p>" +
+    "<p><b>6. 若不同意或不提供資料</b><br/>將無法完成註冊、無法使用本工具的任何功能。</p>" +
+    "<p><b>提醒</b><br/>你在「分類名單」中輸入的是他人(第三人)的姓名等個人資料，請確保你與該對象有適當、既有的關係或業務往來，並自行留意個人資料保護法上的告知義務。</p>" +
+    "</div>" +
+    '<button type="button" class="btn btn-ghost btn-block" id="privacy-back" style="margin-top:16px;">返回註冊</button>' +
+    "</div></div>";
+  document.getElementById("privacy-back").addEventListener("click", function () {
+    state.authScreen = "signup";
     render();
   });
 }
@@ -1034,6 +1070,7 @@ function render() {
   if (state.authScreen === "loading") return renderLoading();
   if (state.authScreen === "signin") return renderSignIn();
   if (state.authScreen === "signup") return renderSignUp();
+  if (state.authScreen === "privacy") return renderPrivacyPolicy();
   if (state.authScreen === "confirm") return renderConfirm();
   if (state.authScreen === "forgot") return renderForgotPassword();
   if (state.authScreen === "reset") return renderResetPassword();
