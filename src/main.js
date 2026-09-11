@@ -1342,22 +1342,36 @@ function renderTrackerView() {
 }
 
 /* ===================== 好友對戰 view ===================== */
-function battleMetricRow(label, mine, theirs) {
+function battleMetricRowTheirs(label, mine, theirs) {
   var max = Math.max(mine, theirs, 1);
   return (
-    '<div class="battle-metric"><div class="bm-label">' +
+    '<div class="battle-metric single">' +
+    '<span class="bm-label-inline">' +
     label +
-    '</div><div class="bm-bars">' +
-    '<div class="bm-bar-row"><span class="bm-who">我</span><div class="bm-track"><i style="width:' +
-    Math.round((mine / max) * 100) +
-    '%"></i></div><span class="bm-num">' +
-    mine +
-    '</span></div>' +
-    '<div class="bm-bar-row other"><span class="bm-who">對方</span><div class="bm-track"><i style="width:' +
+    "</span>" +
+    '<div class="bm-track"><i style="width:' +
     Math.round((theirs / max) * 100) +
-    '%"></i></div><span class="bm-num">' +
+    '%"></i></div>' +
+    '<span class="bm-num">' +
     theirs +
-    "</span></div>" +
+    "</span>" +
+    "</div>"
+  );
+}
+function renderMyProgressSticky(myStat) {
+  return (
+    '<div class="my-progress-sticky" id="my-progress-sticky">' +
+    '<div class="mp-title">我的本週進度</div>' +
+    '<div class="mp-stats">' +
+    '<div class="mp-stat"><span class="mp-num">' +
+    myStat.effectiveContacts +
+    '</span><span class="mp-name">有效聯絡</span></div>' +
+    '<div class="mp-stat"><span class="mp-num">' +
+    myStat.appointments +
+    '</span><span class="mp-name">約會</span></div>' +
+    '<div class="mp-stat"><span class="mp-num">' +
+    myStat.newPeople +
+    '</span><span class="mp-name">新朋友</span></div>' +
     "</div></div>"
   );
 }
@@ -1387,9 +1401,9 @@ function renderBattleView() {
               '<div class="battle-card"><div class="battle-card-head"><b>' +
               esc(f.friendDisplayName || theirStat.displayName || "隊友") +
               "</b></div>" +
-              battleMetricRow("有效聯絡", myStat.effectiveContacts, theirStat.effectiveContacts || 0) +
-              battleMetricRow("約會", myStat.appointments, theirStat.appointments || 0) +
-              battleMetricRow("新朋友", myStat.newPeople, theirStat.newPeople || 0) +
+              battleMetricRowTheirs("有效聯絡", myStat.effectiveContacts, theirStat.effectiveContacts || 0) +
+              battleMetricRowTheirs("約會", myStat.appointments, theirStat.appointments || 0) +
+              battleMetricRowTheirs("新朋友", myStat.newPeople, theirStat.newPeople || 0) +
               "</div>"
             );
           })
@@ -1397,6 +1411,7 @@ function renderBattleView() {
 
   return (
     '<div class="page-head"><div><h2>好友對戰</h2><p>跟隊友互相輸入邀請碼，本週的 10-3-1 進度就能互相看到、互相激勵。</p></div></div>' +
+    renderMyProgressSticky(myStat) +
     '<div class="panel invite-panel">' +
     '<div class="invite-code-row"><div><div class="q-label">我的邀請碼</div><div class="invite-code">' +
     esc(code) +
@@ -1498,7 +1513,20 @@ function render() {
     "</button>" +
     "</nav>";
 
+  syncTopbarHeightVar();
   wireEvents();
+}
+var _topbarResizeWired = false;
+function syncTopbarHeightVar() {
+  var topbar = document.getElementById("topbar");
+  if (!topbar) return;
+  document.documentElement.style.setProperty("--topbar-h", topbar.offsetHeight + "px");
+  if (!_topbarResizeWired) {
+    _topbarResizeWired = true;
+    window.addEventListener("resize", function () {
+      syncTopbarHeightVar();
+    });
+  }
 }
 
 function wireEvents() {
