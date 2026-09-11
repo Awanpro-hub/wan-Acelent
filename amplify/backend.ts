@@ -1,7 +1,7 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { Stack } from 'aws-cdk-lib';
 import { Effect, Policy, PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { EventSourceMapping, StartingPosition } from 'aws-cdk-lib/aws-lambda';
+import { EventSourceMapping, StartingPosition, Function as CdkLambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
 import { pushNotify } from './functions/push-notify/resource';
@@ -32,7 +32,10 @@ cfnUserPool.policies = {
  */
 const teamStatTable = backend.data.resources.tables['TeamStat'];
 const pushSubTable = backend.data.resources.tables['PushSubscription'];
-const pushNotifyLambda = backend.pushNotify.resources.lambda;
+// backend.pushNotify.resources.lambda 的 TypeScript 型別是比較籠統的 IFunction，
+// 沒有宣告 addEnvironment 這個方法（雖然實際上底層物件就是一般的 Lambda Function，
+// 一定支援這個方法）。用型別轉換告訴 TypeScript「這其實是一個 Function」即可。
+const pushNotifyLambda = backend.pushNotify.resources.lambda as CdkLambdaFunction;
 
 pushNotifyLambda.addEnvironment('PUSH_SUBSCRIPTION_TABLE_NAME', pushSubTable.tableName);
 
