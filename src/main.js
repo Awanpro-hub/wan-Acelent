@@ -227,7 +227,27 @@ var state = {
   quickAddMode: "log",
   calendarOpen: false,
   exportOpen: false,
+  confirmDelete: null, // { kind: 'contact'|'log'|'plan', id }
 };
+var _armDeleteTimer = null;
+function isArmed(kind, id) {
+  return !!(state.confirmDelete && state.confirmDelete.kind === kind && state.confirmDelete.id === id);
+}
+function armDelete(kind, id) {
+  state.confirmDelete = { kind: kind, id: id };
+  render();
+  clearTimeout(_armDeleteTimer);
+  _armDeleteTimer = setTimeout(function () {
+    if (isArmed(kind, id)) {
+      state.confirmDelete = null;
+      render();
+    }
+  }, 3000);
+}
+function disarmDelete() {
+  clearTimeout(_armDeleteTimer);
+  state.confirmDelete = null;
+}
 var unsubs = [];
 function clearSubs() {
   unsubs.forEach(function (u) {
@@ -884,9 +904,15 @@ function entryHtmlLog(l) {
     '<div class="e-time">' +
     esc((l.loggedAt || "").replace("T", " ").slice(0, 16)) +
     "</div></div>" +
-    '<button class="x-del" data-del-log="' +
+    '<button class="x-del' +
+    (isArmed("log", l.id) ? " confirm" : "") +
+    '" data-del-log="' +
     l.id +
-    '" title="刪除">✕</button></div>'
+    '" title="' +
+    (isArmed("log", l.id) ? "再按一次確認刪除" : "刪除") +
+    '">' +
+    (isArmed("log", l.id) ? "確定?" : "✕") +
+    "</button></div>"
   );
 }
 function entryHtmlPlan(p) {
@@ -906,9 +932,15 @@ function entryHtmlPlan(p) {
     '<button class="ics-btn" data-ics-plan="' +
     p.id +
     '" title="加入手機日曆">📅</button>' +
-    '<button class="x-del" data-del-plan="' +
+    '<button class="x-del' +
+    (isArmed("plan", p.id) ? " confirm" : "") +
+    '" data-del-plan="' +
     p.id +
-    '" title="刪除">✕</button></div>'
+    '" title="' +
+    (isArmed("plan", p.id) ? "再按一次確認刪除" : "刪除") +
+    '">' +
+    (isArmed("plan", p.id) ? "確定?" : "✕") +
+    "</button></div>"
   );
 }
 
@@ -1000,7 +1032,20 @@ function renderContactsView() {
       var rows = list.length
         ? list
             .map(function (c) {
-              return '<div class="contact-row"><span>' + esc(c.name) + '</span><button class="x-del" data-del-contact="' + c.id + '" title="刪除">✕</button></div>';
+              var armed = isArmed("contact", c.id);
+              return (
+                '<div class="contact-row"><span>' +
+                esc(c.name) +
+                '</span><button class="x-del' +
+                (armed ? " confirm" : "") +
+                '" data-del-contact="' +
+                c.id +
+                '" title="' +
+                (armed ? "再按一次確認刪除" : "刪除") +
+                '">' +
+                (armed ? "確定?" : "✕") +
+                "</button></div>"
+              );
             })
             .join("")
         : '<div class="empty-hint">尚無名單</div>';
@@ -1165,7 +1210,13 @@ function wireEvents() {
       });
     app.querySelectorAll("[data-del-contact]").forEach(function (btn) {
       btn.addEventListener("click", async function () {
-        await client.models.Contact.delete({ id: btn.getAttribute("data-del-contact") });
+        var id = btn.getAttribute("data-del-contact");
+        if (isArmed("contact", id)) {
+          disarmDelete();
+          await client.models.Contact.delete({ id: id });
+        } else {
+          armDelete("contact", id);
+        }
       });
     });
   }
@@ -1287,12 +1338,24 @@ function wireEvents() {
       });
     app.querySelectorAll("[data-del-log]").forEach(function (btn) {
       btn.addEventListener("click", async function () {
-        await client.models.ContactLog.delete({ id: btn.getAttribute("data-del-log") });
+        var id = btn.getAttribute("data-del-log");
+        if (isArmed("log", id)) {
+          disarmDelete();
+          await client.models.ContactLog.delete({ id: id });
+        } else {
+          armDelete("log", id);
+        }
       });
     });
     app.querySelectorAll("[data-del-plan]").forEach(function (btn) {
       btn.addEventListener("click", async function () {
-        await client.models.WorkPlan.delete({ id: btn.getAttribute("data-del-plan") });
+        var id = btn.getAttribute("data-del-plan");
+        if (isArmed("plan", id)) {
+          disarmDelete();
+          await client.models.WorkPlan.delete({ id: id });
+        } else {
+          armDelete("plan", id);
+        }
       });
     });
     app.querySelectorAll("[data-ics-plan]").forEach(function (btn) {
