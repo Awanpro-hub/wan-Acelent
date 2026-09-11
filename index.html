@@ -316,6 +316,62 @@
   .pw-wrap input{padding-right:42px;}
   .pw-toggle{position:absolute; right:4px; top:50%; transform:translateY(-50%); width:32px; height:32px; border:none; background:none; cursor:pointer; font-size:16px; border-radius:8px; color:var(--ink-faint);}
   .pw-toggle:hover{background:var(--surface-2);}
+
+  /* ---------- mobile bottom nav ---------- */
+  .bottom-nav{display:none;}
+  @media (max-width: 700px){
+    #topbar nav{display:none;}
+    .bottom-nav{
+      display:flex; position:fixed; left:0; right:0; bottom:0; z-index:30;
+      background:var(--surface); border-top:1px solid var(--border);
+      padding:6px 10px calc(6px + env(safe-area-inset-bottom));
+      box-shadow: 0 -6px 20px rgba(43,36,27,.08);
+    }
+    .bottom-nav button{
+      flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;
+      background:transparent; border:none; padding:7px 4px 6px; border-radius:12px;
+      color:var(--ink-faint); font-size:11px; font-weight:700; cursor:pointer;
+    }
+    .bottom-nav button .ic{font-size:19px; line-height:1;}
+    .bottom-nav button.active{color:var(--accent-strong); background:var(--accent-soft);}
+    main{padding-bottom:92px;}
+    .btn{min-height:44px;}
+    .btn-sm{min-height:38px;}
+    .tabs button{padding:10px 14px; font-size:14px; min-height:40px;}
+    #topbar .whoami span:not(.badge-mode){display:none;}
+  }
+  @media (hover:none){
+    .contact-row .x-del, .entry .x-del{opacity:.6;}
+  }
+  @media (hover:hover){
+    .group-card, .quota-card{transition:transform .15s ease, box-shadow .15s ease;}
+    .group-card:hover, .quota-card:hover{transform:translateY(-2px); box-shadow:0 6px 14px -4px rgba(43,36,27,.12), 0 20px 36px -20px rgba(43,36,27,.28);}
+  }
+
+  /* ---------- motion & loading polish ---------- */
+  .q-bar .seg i{transition:width .6s cubic-bezier(.4,0,.2,1);}
+  .q-dots .slot{transition:background .3s ease, border-color .3s ease, color .3s ease;}
+  main{animation:fadeIn .28s ease;}
+  @keyframes fadeIn{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+  .loading-screen{flex-direction:column; gap:14px;}
+  .spinner{width:30px; height:30px; border-radius:50%; border:3px solid var(--border); border-top-color:var(--accent); animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  /* ---------- quick-add panels ---------- */
+  .seg-toggle{display:inline-flex; background:var(--surface-2); border-radius:10px; padding:3px; gap:2px;}
+  .seg-toggle button{border:none; background:transparent; padding:7px 14px; border-radius:8px; font-size:13px; font-weight:700; color:var(--ink-soft); cursor:pointer;}
+  .seg-toggle button.active{background:var(--surface); color:var(--ink); box-shadow:var(--shadow);}
+  .qa-head{display:flex; align-items:center; justify-content:space-between; gap:10px 14px; flex-wrap:wrap; margin-bottom:14px;}
+  .qa-head h3{margin:0;}
+  .quick-add-contact{margin-bottom:16px; padding:14px;}
+  .qac-form{display:flex; gap:8px; flex-wrap:wrap;}
+  .qac-form input{flex:2 1 160px; padding:11px 14px; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--ink);}
+  .qac-form select{flex:1 1 130px; padding:11px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--ink);}
+  .qac-form .btn{flex:none;}
+  @media (max-width: 480px){
+    .qac-form{flex-direction:column;}
+    .qac-form input, .qac-form select, .qac-form .btn{width:100%;}
+  }
 </style>
 </head>
 <body>

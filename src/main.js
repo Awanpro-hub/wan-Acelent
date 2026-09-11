@@ -110,6 +110,7 @@ var state = {
   calMonth: new Date().getMonth(),
   selectedDate: todayKey(),
   trackerTab: "today",
+  quickAddMode: "log",
 };
 var unsubs = [];
 function clearSubs() {
@@ -203,7 +204,8 @@ function renderAuthShell(inner) {
 }
 
 function renderLoading() {
-  document.getElementById("app").innerHTML = '<div class="loading-screen">載入中…</div>';
+  document.getElementById("app").innerHTML =
+    '<div class="loading-screen"><div class="spinner"></div><div>載入中…</div></div>';
 }
 
 function renderSignIn() {
@@ -551,49 +553,59 @@ function contactOptionsHtml() {
     .join("");
 }
 
-function renderLogForm() {
-  var typeOpts = LOG_TYPES.map(function (t) {
+function renderQuickAddPanel() {
+  var mode = state.quickAddMode === "plan" ? "plan" : "log";
+
+  var logTypeOpts = LOG_TYPES.map(function (t) {
     return '<option value="' + t.v + '">' + t.v + "：" + esc(t.label) + "</option>";
   }).join("");
-  return (
-    '<div class="panel"><h3>新增今日聯絡 <span class="hint">選取日期：' +
-    fmtDateHuman(state.selectedDate) +
-    '</span></h3>' +
+  var planTypeOpts = PLAN_TYPES.map(function (t) {
+    return '<option value="' + t.v + '">' + esc(t.label) + (t.minutes ? "（" + t.minutes + "）" : "") + "</option>";
+  }).join("");
+
+  var logForm =
     '<form class="stack" id="log-form">' +
     '<div><label class="sub">對象姓名</label>' +
     '<input class="text-input" list="contact-names" name="name" placeholder="輸入或從名單選擇" required style="margin-top:4px;"/></div>' +
     '<div class="row2">' +
     '<div><label class="sub">分類（4321）</label><select name="type" style="margin-top:4px;">' +
-    typeOpts +
+    logTypeOpts +
     "</select></div>" +
     '<div><label class="sub">聯絡時間</label><input class="text-input" type="time" name="time" value="16:00" style="margin-top:4px;"/></div>' +
     "</div>" +
     '<div><label class="sub">內容備註</label><textarea name="note" placeholder="聊了什麼、下一步…" style="margin-top:4px;"></textarea></div>' +
-    '<button class="btn btn-accent" type="submit">送出聯絡記錄</button>' +
-    "</form></div>"
-  );
-}
+    '<button class="btn btn-accent btn-block" type="submit">送出聯絡記錄</button>' +
+    "</form>";
 
-function renderPlanForm() {
-  var typeOpts = PLAN_TYPES.map(function (t) {
-    return '<option value="' + t.v + '">' + esc(t.label) + (t.minutes ? "（" + t.minutes + "）" : "") + "</option>";
-  }).join("");
-  return (
-    '<div class="panel"><h3>新增工作規劃 <span class="hint">第二把 1+1+1</span></h3>' +
+  var planForm =
     '<form class="stack" id="plan-form">' +
     '<div><label class="sub">對象姓名</label>' +
     '<input class="text-input" list="contact-names" name="name" placeholder="輸入或從名單選擇" required style="margin-top:4px;"/></div>' +
     '<div class="row2">' +
     '<div><label class="sub">類型</label><select name="planType" style="margin-top:4px;">' +
-    typeOpts +
+    planTypeOpts +
     "</select></div>" +
     '<div><label class="sub">安排日期</label><input class="text-input" type="date" name="date" value="' +
     state.selectedDate +
     '" style="margin-top:4px;"/></div>' +
     "</div>" +
     '<div><label class="sub">工作內容</label><textarea name="note" placeholder="約會地點、要談的內容…" style="margin-top:4px;"></textarea></div>' +
-    '<button class="btn btn-accent" type="submit">送出工作規劃</button>' +
-    "</form></div>"
+    '<button class="btn btn-accent btn-block" type="submit">送出工作規劃</button>' +
+    "</form>";
+
+  return (
+    '<div class="panel" id="quick-add-panel"><div class="qa-head"><h3 style="margin:0;">快速新增 <span class="hint">選取日期：' +
+    fmtDateHuman(state.selectedDate) +
+    '</span></h3><div class="seg-toggle" role="tablist">' +
+    '<button type="button" data-qa-mode="log" class="' +
+    (mode === "log" ? "active" : "") +
+    '">聯絡記錄</button>' +
+    '<button type="button" data-qa-mode="plan" class="' +
+    (mode === "plan" ? "active" : "") +
+    '">工作規劃</button>' +
+    "</div></div>" +
+    (mode === "log" ? logForm : planForm) +
+    "</div>"
   );
 }
 
@@ -729,8 +741,23 @@ function renderContactsView() {
     '<input type="text" placeholder="自訂群組名稱，如：教會、球隊" maxlength="12" required />' +
     '<button class="btn btn-ghost btn-sm" type="submit">＋ 新增群組</button></form></div>';
 
+  var groupOpts = groups
+    .map(function (g) {
+      return '<option value="' + g.id + '" data-name="' + esc(g.name) + '">' + esc(g.name) + "</option>";
+    })
+    .join("");
+  var quickAdd =
+    '<div class="panel quick-add-contact"><form id="quick-add-contact-form" class="qac-form">' +
+    '<input class="text-input" type="text" id="qac-name" placeholder="輸入姓名，快速加入名單" maxlength="20" required />' +
+    '<select id="qac-group">' +
+    groupOpts +
+    "</select>" +
+    '<button class="btn btn-accent" type="submit">＋ 加入</button>' +
+    "</form></div>";
+
   return (
     '<div class="page-head"><div><h2>分類名單</h2><p>把你認識的人放進對的分類，是「極光行動」第一步。</p></div></div>' +
+    quickAdd +
     '<div class="group-grid">' +
     cards +
     addGroupCard +
@@ -746,8 +773,7 @@ function renderTrackerView() {
     '<div class="tracker-grid"><div>' +
     renderCalendar() +
     "</div><div>" +
-    renderLogForm() +
-    renderPlanForm() +
+    renderQuickAddPanel() +
     "</div></div>" +
     '<div style="height:20px"></div>' +
     renderTabs() +
@@ -782,7 +808,15 @@ function render() {
     "<main>" +
     (state.view === "contacts" ? renderContactsView() : renderTrackerView()) +
     "</main>" +
-    '<div class="footer-note">資料儲存在你自己的 AWS 帳號中，只有你看得到，登入後可跨裝置同步。</div>';
+    '<div class="footer-note">資料儲存在你自己的 AWS 帳號中，只有你看得到，登入後可跨裝置同步。</div>' +
+    '<nav class="bottom-nav">' +
+    '<button data-view="contacts" class="' +
+    (state.view === "contacts" ? "active" : "") +
+    '"><span class="ic">📋</span>分類名單</button>' +
+    '<button data-view="tracker" class="' +
+    (state.view === "tracker" ? "active" : "") +
+    '"><span class="ic">🎯</span>10-3-1 追蹤</button>' +
+    "</nav>";
 
   wireEvents();
 }
@@ -790,7 +824,7 @@ function render() {
 function wireEvents() {
   var app = document.getElementById("app");
 
-  app.querySelectorAll("#topbar nav button").forEach(function (b) {
+  app.querySelectorAll("#topbar nav button, .bottom-nav button").forEach(function (b) {
     b.addEventListener("click", function () {
       state.view = b.getAttribute("data-view");
       render();
@@ -812,6 +846,28 @@ function wireEvents() {
     });
 
   if (state.view === "contacts") {
+    var qacForm = document.getElementById("quick-add-contact-form");
+    if (qacForm)
+      qacForm.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var nameInput = document.getElementById("qac-name");
+        var groupSelect = document.getElementById("qac-group");
+        var name = nameInput.value.trim();
+        if (!name) return;
+        var opt = groupSelect.options[groupSelect.selectedIndex];
+        try {
+          await client.models.Contact.create({
+            name: name,
+            groupId: groupSelect.value,
+            groupName: opt ? opt.getAttribute("data-name") : "",
+          });
+          nameInput.value = "";
+          nameInput.focus();
+          showToast("已加入「" + (opt ? opt.getAttribute("data-name") : "") + "」");
+        } catch (err) {
+          showToast(friendlyAuthError(err));
+        }
+      });
     app.querySelectorAll("[data-add-to]").forEach(function (form) {
       form.addEventListener("submit", async function (e) {
         e.preventDefault();
@@ -849,6 +905,13 @@ function wireEvents() {
   }
 
   if (state.view === "tracker") {
+    app.querySelectorAll("[data-qa-mode]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.quickAddMode = btn.getAttribute("data-qa-mode");
+        render();
+      });
+    });
+
     var prev = document.getElementById("cal-prev");
     var next = document.getElementById("cal-next");
     if (prev)
