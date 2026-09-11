@@ -39,7 +39,15 @@ const pushNotifyLambda = backend.pushNotify.resources.lambda as CdkLambdaFunctio
 
 pushNotifyLambda.addEnvironment('PUSH_SUBSCRIPTION_TABLE_NAME', pushSubTable.tableName);
 
-const streamPolicy = new Policy(Stack.of(teamStatTable), 'PushNotifyStreamPolicy', {
+// 注意：這些建構元都放在「function 自己的 stack」裡（Stack.of(pushNotifyLambda)），
+// 不是放在 data 的 stack 裡。因為上面 addEnvironment 已經讓 function stack
+// 依賴 data stack（要讀 pushSubTable.tableName）；如果這裡的 Policy／EventSourceMapping
+// 又放在 data stack 裡、反過來依賴 function 的 role/Lambda，兩個 nested stack
+// 就會互相依賴，造成 CloudFormation 部署失敗（circular dependency between nested stacks）。
+// 全部放同一個方向（function stack 依賴 data stack），就不會有循環依賴的問題。
+const functionStack = Stack.of(pushNotifyLambda);
+
+const streamPolicy = new Policy(functionStack, 'PushNotifyStreamPolicy', {
   statements: [
     new PolicyStatement({
       effect: Effect.ALLOW,
@@ -50,7 +58,7 @@ const streamPolicy = new Policy(Stack.of(teamStatTable), 'PushNotifyStreamPolicy
 });
 pushNotifyLambda.role?.attachInlinePolicy(streamPolicy);
 
-const readSubsPolicy = new Policy(Stack.of(pushSubTable), 'PushNotifyReadSubscriptionsPolicy', {
+const readSubsPolicy = new Policy(functionStack, 'PushNotifyReadSubscriptionsPolicy', {
   statements: [
     new PolicyStatement({
       effect: Effect.ALLOW,
@@ -61,7 +69,7 @@ const readSubsPolicy = new Policy(Stack.of(pushSubTable), 'PushNotifyReadSubscri
 });
 pushNotifyLambda.role?.attachInlinePolicy(readSubsPolicy);
 
-const streamMapping = new EventSourceMapping(Stack.of(teamStatTable), 'PushNotifyTeamStatStreamMapping', {
+const streamMapping = new EventSourceMapping(functionStack, 'PushNotifyTeamStatStreamMapping', {
   target: pushNotifyLambda,
   eventSourceArn: teamStatTable.tableStreamArn,
   startingPosition: StartingPosition.LATEST,
