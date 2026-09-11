@@ -228,7 +228,18 @@ var state = {
   calendarOpen: false,
   exportOpen: false,
   confirmDelete: null, // { kind: 'contact'|'log'|'plan', id }
+  myIdentity: "",
+  friends: [],
+  teamStats: [],
+  battleNotice: false,
+  addFriendErr: "",
 };
+function genInviteCode() {
+  var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉容易看錯的 0/O/1/I
+  var out = "";
+  for (var i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
 var _armDeleteTimer = null;
 function isArmed(kind, id) {
   return !!(state.confirmDelete && state.confirmDelete.kind === kind && state.confirmDelete.id === id);
@@ -281,6 +292,7 @@ function subscribeAll() {
     client.models.ContactLog.observeQuery().subscribe({
       next: function (r) {
         state.logs = r.items;
+        syncMyTeamStat();
         render();
       },
     })
@@ -289,10 +301,125 @@ function subscribeAll() {
     client.models.WorkPlan.observeQuery().subscribe({
       next: function (r) {
         state.plans = r.items;
+        syncMyTeamStat();
         render();
       },
     })
   );
+  unsubs.push(
+    client.models.Friend.observeQuery().subscribe({
+      next: function (r) {
+        state.friends = r.items;
+        syncMyTeamStat();
+        render();
+      },
+    })
+  );
+  unsubs.push(
+    client.models.TeamStat.observeQuery().subscribe({
+      next: function (r) {
+        state.teamStats = r.items;
+        checkBattleNotice();
+        render();
+      },
+    })
+  );
+}
+
+/* ===================== 好友對戰 ===================== */
+var _syncStatTimer = null;
+function weekStatsFor(weekKeys) {
+  var effectiveContacts = state.logs.filter(function (l) {
+    return weekKeys.indexOf((l.loggedAt || "").slice(0, 10)) > -1;
+  }).length;
+
+  var appointments = 0;
+  weekKeys.forEach(function (dk) {
+    var haveType = { 1: false, 2: false, 3: false };
+    plansOn(dk).forEach(function (p) {
+      if (haveType[p.planType] !== undefined) haveType[p.planType] = true;
+    });
+    appointments += (haveType[1] ? 1 : 0) + (haveType[2] ? 1 : 0) + (haveType[3] ? 1 : 0);
+  });
+
+  var newPeople = state.logs.filter(function (l) {
+    return l.type === "1" && weekKeys.indexOf((l.loggedAt || "").slice(0, 10)) > -1;
+  }).length;
+
+  return { effectiveContacts: effectiveContacts, appointments: appointments, newPeople: newPeople };
+}
+function syncMyTeamStat() {
+  if (!state.profile || !state.myIdentity) return;
+  clearTimeout(_syncStatTimer);
+  _syncStatTimer = setTimeout(function () {
+    var wk = weekRangeKeys(todayKey());
+    var weekKey = wk[0];
+    var s = weekStatsFor(wk);
+    var viewers = state.friends
+      .map(function (f) {
+        return f.friendOwnerId;
+      })
+      .filter(Boolean);
+    var mine = state.teamStats.filter(function (t) {
+      return t.owner === state.myIdentity && t.weekKey === weekKey;
+    })[0];
+    var sameViewers =
+      mine &&
+      (mine.viewers || []).length === viewers.length &&
+      (mine.viewers || []).every(function (v) {
+        return viewers.indexOf(v) > -1;
+      });
+    if (
+      mine &&
+      mine.effectiveContacts === s.effectiveContacts &&
+      mine.appointments === s.appointments &&
+      mine.newPeople === s.newPeople &&
+      sameViewers
+    ) {
+      return; // 沒有變化，不用多寫一次
+    }
+    var payload = {
+      weekKey: weekKey,
+      displayName: state.profile.displayName,
+      effectiveContacts: s.effectiveContacts,
+      appointments: s.appointments,
+      newPeople: s.newPeople,
+      viewers: viewers,
+    };
+    if (mine) {
+      client.models.TeamStat.update(Object.assign({ id: mine.id }, payload)).catch(function () {});
+    } else {
+      client.models.TeamStat.create(payload).catch(function () {});
+    }
+  }, 400);
+}
+function checkBattleNotice() {
+  var latest = 0;
+  state.teamStats.forEach(function (t) {
+    if (t.owner === state.myIdentity) return;
+    var ts = Date.parse(t.updatedAt || "") || 0;
+    if (ts > latest) latest = ts;
+  });
+  var lastSeen = 0;
+  try {
+    lastSeen = parseInt(localStorage.getItem("battleLastSeen") || "0", 10) || 0;
+  } catch (e) {}
+  state.battleNotice = latest > lastSeen;
+}
+function markBattleSeen() {
+  state.battleNotice = false;
+  try {
+    localStorage.setItem("battleLastSeen", String(Date.now()));
+  } catch (e) {}
+}
+async function ensureInviteCode() {
+  if (!state.profile || state.profile.inviteCode) return;
+  var code = genInviteCode();
+  try {
+    var res = await client.models.Profile.update({ id: state.profile.id, inviteCode: code });
+    state.profile = res.data;
+    render();
+  } catch (e) {}
 }
 
 async function enterApp() {
@@ -303,9 +430,17 @@ async function enterApp() {
 
 async function afterSignedIn() {
   try {
+    // Profile 現在所有登入者都能「讀」到（好友對戰要靠邀請碼互相找到彼此），
+    // 所以這裡拿到的清單是「大家的」Profile，要用自己的帳號 sub 挑出「我自己的」那一筆。
+    var cu = await getCurrentUser();
     var res = await client.models.Profile.list();
-    if (res.data && res.data.length > 0) {
-      state.profile = res.data[0];
+    var mine = (res.data || []).filter(function (p) {
+      return p.owner && p.owner.indexOf(cu.userId) === 0;
+    })[0];
+    if (mine) {
+      state.profile = mine;
+      state.myIdentity = mine.owner;
+      await ensureInviteCode();
       enterApp();
     } else {
       state.authScreen = "setname";
@@ -346,7 +481,7 @@ function renderLoading() {
 
 function renderSignIn() {
   renderAuthShell(
-    '<p class="lede">卓越團隊的名單本與 10-3-1 每日追蹤。用你的 Email 登入。</p>' +
+    '<p class="lede">分類名單與 10-3-1 每日追蹤，用你的 Email 登入。</p>' +
       '<form id="signin-form" class="stack">' +
       '<div><label class="field-label" for="si-email">Email</label>' +
       '<input class="text-input" id="si-email" type="email" required autocomplete="email" /></div>' +
@@ -605,8 +740,9 @@ function renderSetName() {
     if (!name) return;
     var errEl = document.getElementById("sn-err");
     try {
-      var res = await client.models.Profile.create({ displayName: name });
+      var res = await client.models.Profile.create({ displayName: name, inviteCode: genInviteCode() });
       state.profile = res.data;
+      state.myIdentity = res.data.owner;
       enterApp();
     } catch (err) {
       errEl.textContent = friendlyAuthError(err);
@@ -1110,6 +1246,78 @@ function renderTrackerView() {
   );
 }
 
+/* ===================== 好友對戰 view ===================== */
+function battleMetricRow(label, mine, theirs) {
+  var max = Math.max(mine, theirs, 1);
+  return (
+    '<div class="battle-metric"><div class="bm-label">' +
+    label +
+    '</div><div class="bm-bars">' +
+    '<div class="bm-bar-row"><span class="bm-who">我</span><div class="bm-track"><i style="width:' +
+    Math.round((mine / max) * 100) +
+    '%"></i></div><span class="bm-num">' +
+    mine +
+    '</span></div>' +
+    '<div class="bm-bar-row other"><span class="bm-who">對方</span><div class="bm-track"><i style="width:' +
+    Math.round((theirs / max) * 100) +
+    '%"></i></div><span class="bm-num">' +
+    theirs +
+    "</span></div>" +
+    "</div></div>"
+  );
+}
+function renderBattleView() {
+  var wk = weekRangeKeys(todayKey());
+  var weekKey = wk[0];
+  var myStat = weekStatsFor(wk);
+  var code = (state.profile && state.profile.inviteCode) || "產生中…";
+
+  var cardsHtml =
+    state.friends.length === 0
+      ? '<div class="empty-hint">還沒有加好友。跟隊友互相輸入邀請碼，就能互看本週 10-3-1 進度囉！</div>'
+      : state.friends
+          .map(function (f) {
+            var theirStat = state.teamStats.filter(function (t) {
+              return t.owner === f.friendOwnerId && t.weekKey === weekKey;
+            })[0];
+            if (!theirStat) {
+              return (
+                '<div class="battle-card pending"><div class="battle-card-head"><b>' +
+                esc(f.friendDisplayName || "隊友") +
+                '</b><span class="battle-pending-tag">等待對方也加入你</span></div>' +
+                '<p class="battle-pending-note">你已經加了他，但要等他也把你加為好友，才能互看進度。</p></div>'
+              );
+            }
+            return (
+              '<div class="battle-card"><div class="battle-card-head"><b>' +
+              esc(f.friendDisplayName || theirStat.displayName || "隊友") +
+              "</b></div>" +
+              battleMetricRow("有效聯絡", myStat.effectiveContacts, theirStat.effectiveContacts || 0) +
+              battleMetricRow("約會", myStat.appointments, theirStat.appointments || 0) +
+              battleMetricRow("新朋友", myStat.newPeople, theirStat.newPeople || 0) +
+              "</div>"
+            );
+          })
+          .join("");
+
+  return (
+    '<div class="page-head"><div><h2>好友對戰</h2><p>跟隊友互相輸入邀請碼，本週的 10-3-1 進度就能互相看到、互相激勵。</p></div></div>' +
+    '<div class="panel invite-panel">' +
+    '<div class="invite-code-row"><div><div class="q-label">我的邀請碼</div><div class="invite-code">' +
+    esc(code) +
+    '</div></div><button class="btn btn-ghost btn-sm" id="copy-invite-btn" type="button">複製</button></div>' +
+    '<form id="add-friend-form" class="add-friend-form">' +
+    '<input class="text-input" id="af-code" maxlength="6" placeholder="輸入好友的邀請碼" style="text-transform:uppercase" />' +
+    '<button type="submit" class="btn btn-accent btn-sm">加好友</button></form>' +
+    (state.addFriendErr ? '<div class="field-error">' + esc(state.addFriendErr) + "</div>" : "") +
+    '<p class="battle-tip">💡 目前是「軟通知」：隊友更新進度時，上面選單的「好友對戰」會出現紅點提醒；還沒有像手機推播那種沒開 App 也會跳通知的功能，需要的話之後可以再加。</p>' +
+    "</div>" +
+    '<div class="battle-list">' +
+    cardsHtml +
+    "</div>"
+  );
+}
+
 /* ===================== shell + wiring ===================== */
 function render() {
   if (state.authScreen === "loading") return renderLoading();
@@ -1130,13 +1338,22 @@ function render() {
     '">分類名單</button>' +
     '<button data-view="tracker" class="' +
     (state.view === "tracker" ? "active" : "") +
-    '">10-3-1 追蹤</button></nav>' +
+    '">10-3-1 追蹤</button>' +
+    '<button data-view="battle" class="' +
+    (state.view === "battle" ? "active" : "") +
+    '">好友對戰' +
+    (state.battleNotice ? '<span class="notice-dot"></span>' : "") +
+    "</button></nav>" +
     '<div class="spacer"></div>' +
     '<div class="whoami"><span class="badge-mode live">● 團隊同步中</span><span>你好，<b>' +
     esc(name) +
     '</b></span><button class="btn btn-ghost btn-sm" id="sign-out-btn">登出</button></div></div>' +
     "<main>" +
-    (state.view === "contacts" ? renderContactsView() : renderTrackerView()) +
+    (state.view === "contacts"
+      ? renderContactsView()
+      : state.view === "battle"
+      ? renderBattleView()
+      : renderTrackerView()) +
     "</main>" +
     '<div class="footer-note">資料儲存在你自己的 AWS 帳號中，只有你看得到，登入後可跨裝置同步。</div>' +
     '<nav class="bottom-nav">' +
@@ -1146,6 +1363,11 @@ function render() {
     '<button data-view="tracker" class="' +
     (state.view === "tracker" ? "active" : "") +
     '"><span class="ic">🎯</span>10-3-1 追蹤</button>' +
+    '<button data-view="battle" class="' +
+    (state.view === "battle" ? "active" : "") +
+    '"><span class="ic">⚔️</span>好友對戰' +
+    (state.battleNotice ? '<span class="notice-dot"></span>' : "") +
+    "</button>" +
     "</nav>";
 
   wireEvents();
@@ -1157,6 +1379,7 @@ function wireEvents() {
   app.querySelectorAll("#topbar nav button, .bottom-nav button").forEach(function (b) {
     b.addEventListener("click", function () {
       state.view = b.getAttribute("data-view");
+      if (state.view === "battle") markBattleSeen();
       render();
     });
   });
@@ -1171,6 +1394,11 @@ function wireEvents() {
       state.logs = [];
       state.plans = [];
       state.profile = null;
+      state.friends = [];
+      state.teamStats = [];
+      state.myIdentity = "";
+      state.battleNotice = false;
+      state.addFriendErr = "";
       state.authScreen = "signin";
       render();
     });
@@ -1219,6 +1447,62 @@ function wireEvents() {
         }
       });
     });
+  }
+
+  if (state.view === "battle") {
+    var copyBtn = document.getElementById("copy-invite-btn");
+    if (copyBtn)
+      copyBtn.addEventListener("click", function () {
+        var code = state.profile && state.profile.inviteCode;
+        if (!code) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(code).then(function () {
+            showToast("已複製邀請碼");
+          });
+        } else {
+          showToast("邀請碼：" + code);
+        }
+      });
+    var afForm = document.getElementById("add-friend-form");
+    if (afForm)
+      afForm.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var input = document.getElementById("af-code");
+        var code = (input.value || "").trim().toUpperCase();
+        state.addFriendErr = "";
+        if (!code) return;
+        if (state.profile && state.profile.inviteCode === code) {
+          state.addFriendErr = "這是你自己的邀請碼喔";
+          render();
+          return;
+        }
+        try {
+          var res = await client.models.Profile.list({ filter: { inviteCode: { eq: code } } });
+          var found = res.data && res.data[0];
+          if (!found) {
+            state.addFriendErr = "找不到這組邀請碼，請跟對方確認拼字";
+            render();
+            return;
+          }
+          var already = state.friends.some(function (f) {
+            return f.friendOwnerId === found.owner;
+          });
+          if (already) {
+            state.addFriendErr = "已經加過這位好友了";
+            render();
+            return;
+          }
+          await client.models.Friend.create({
+            friendOwnerId: found.owner,
+            friendDisplayName: found.displayName,
+          });
+          showToast("已加入「" + found.displayName + "」，等對方也加入你就能互看進度");
+          input.value = "";
+        } catch (err) {
+          state.addFriendErr = friendlyAuthError(err);
+          render();
+        }
+      });
   }
 
   if (state.view === "tracker") {

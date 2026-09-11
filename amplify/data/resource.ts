@@ -10,11 +10,38 @@ import { a, defineData, type ClientSchema } from '@aws-amplify/backend';
  */
 const schema = a.schema({
   // 個人顯示名稱（登入後第一次使用時填寫一次）
+  // inviteCode 開放給所有登入使用者「讀取」，這樣隊友才能用邀請碼找到你、加你為好友；
+  // 只有 displayName、inviteCode 這種公開的顯示資訊，不影響原本名單/紀錄的隱私。
   Profile: a
     .model({
       displayName: a.string().required(),
+      inviteCode: a.string(),
+    })
+    .authorization((allow) => [allow.owner(), allow.authenticated().to(['read'])]),
+
+  // 好友對戰：我加的好友清單（只有我自己看得到我加了誰）
+  Friend: a
+    .model({
+      friendOwnerId: a.string().required(), // 對方的帳號識別碼（來自對方 Profile 的 owner 欄位）
+      friendDisplayName: a.string(),
     })
     .authorization((allow) => [allow.owner()]),
+
+  // 好友對戰：每週的 10-3-1 統計快照。
+  // viewers 是「我允許誰看到這筆資料」的名單（我加的好友），
+  // 對方必須也把我加進他的好友，我們才會互相出現在彼此的 viewers 裡、互相看得到進度。
+  TeamStat: a
+    .model({
+      weekKey: a.string().required(), // 該週週一的日期，例如 "2026-09-07"
+      displayName: a.string(),
+      effectiveContacts: a.integer().default(0),
+      appointments: a.integer().default(0),
+      newPeople: a.integer().default(0),
+      viewers: a.string().array(),
+      // 注意：不用自己再宣告 updatedAt，Amplify 每個 model 都會自動維護一個
+      // updatedAt / createdAt 系統欄位，拿來判斷「隊友最近有沒有更新」就夠用了。
+    })
+    .authorization((allow) => [allow.owner(), allow.ownersDefinedIn('viewers').to(['read'])]),
 
   // 分類名單裡的一筆聯絡人
   Contact: a
