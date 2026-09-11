@@ -2,12 +2,20 @@ import type { DynamoDBStreamHandler } from 'aws-lambda';
 import { DynamoDBClient, ScanCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import webpush from 'web-push';
-// eslint-disable-next-line import/no-unresolved
-import { env } from '$amplify/env/push-notify';
+
+// 注意：這裡故意不用 Amplify 的 "$amplify/env/push-notify" 這個特殊路徑
+// （官方文件範例是這樣寫，但在 pipeline-deploy 的建置環境下 esbuild 解析不了這個路徑，
+// 建置會直接失敗）。改用最單純、保證能用的 process.env 讀取一樣的環境變數/密鑰，
+// 效果完全相同。
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:example@example.com';
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
 
 const ddb = new DynamoDBClient({});
 
-webpush.setVapidDetails(env.VAPID_SUBJECT, env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
 
 type SubRow = {
   owner?: string;
@@ -17,6 +25,10 @@ type SubRow = {
 };
 
 export const handler: DynamoDBStreamHandler = async (event) => {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+    console.error('缺少 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY，還沒設定 Secret 之前無法發送推播。');
+    return;
+  }
   var teamStatItems: { viewers: string[]; displayName: string }[] = [];
 
   for (const record of event.Records) {
