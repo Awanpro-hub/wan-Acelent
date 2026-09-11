@@ -68,6 +68,17 @@ function showToast(msg) {
     t.classList.remove("show");
   }, 2400);
 }
+function wirePasswordToggles() {
+  document.querySelectorAll("[data-toggle-pw]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var input = document.getElementById(btn.getAttribute("data-toggle-pw"));
+      if (!input) return;
+      var showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      btn.textContent = showing ? "👁" : "🙈";
+    });
+  });
+}
 function friendlyAuthError(err) {
   var name = (err && err.name) || "";
   var map = {
@@ -77,7 +88,7 @@ function friendlyAuthError(err) {
     UserNotConfirmedException: "這個帳號還沒完成驗證，請輸入收到的驗證碼。",
     CodeMismatchException: "驗證碼不正確，請再確認一次。",
     ExpiredCodeException: "驗證碼已過期，請重新寄送。",
-    InvalidPasswordException: "密碼不符合規則，請至少 8 碼並包含大小寫字母與數字。",
+    InvalidPasswordException: "密碼不符合規則，請至少 8 碼並包含英文字母與數字。",
     LimitExceededException: "操作太頻繁了，請稍後再試。",
     InvalidParameterException: "請確認輸入的 Email 格式正確。",
   };
@@ -202,12 +213,14 @@ function renderSignIn() {
       '<div><label class="field-label" for="si-email">Email</label>' +
       '<input class="text-input" id="si-email" type="email" required autocomplete="email" /></div>' +
       '<div><label class="field-label" for="si-pw">密碼</label>' +
-      '<input class="text-input" id="si-pw" type="password" required autocomplete="current-password" /></div>' +
+      '<div class="pw-wrap"><input class="text-input" id="si-pw" type="password" required autocomplete="current-password" />' +
+      '<button type="button" class="pw-toggle" data-toggle-pw="si-pw" title="顯示/隱藏密碼">👁</button></div></div>' +
       '<div class="field-error" id="si-err"></div>' +
       '<button type="submit" class="btn btn-accent btn-block">登入</button>' +
       "</form>" +
       '<div class="auth-toggle">還沒有帳號？<button id="go-signup" type="button">建立一個</button></div>'
   );
+  wirePasswordToggles();
   document.getElementById("signin-form").addEventListener("submit", async function (e) {
     e.preventDefault();
     var email = document.getElementById("si-email").value.trim();
@@ -235,12 +248,14 @@ function renderSignUp() {
       '<div><label class="field-label" for="su-email">Email</label>' +
       '<input class="text-input" id="su-email" type="email" required autocomplete="email" /></div>' +
       '<div><label class="field-label" for="su-pw">密碼</label>' +
-      '<input class="text-input" id="su-pw" type="password" required minlength="8" autocomplete="new-password" placeholder="至少 8 碼，含大小寫字母與數字" /></div>' +
+      '<div class="pw-wrap"><input class="text-input" id="su-pw" type="password" required minlength="8" autocomplete="new-password" placeholder="至少 8 碼，需有英文字母與數字" />' +
+      '<button type="button" class="pw-toggle" data-toggle-pw="su-pw" title="顯示/隱藏密碼">👁</button></div></div>' +
       '<div class="field-error" id="su-err"></div>' +
       '<button type="submit" class="btn btn-accent btn-block">註冊</button>' +
       "</form>" +
       '<div class="auth-toggle">已經有帳號了？<button id="go-signin" type="button">直接登入</button></div>'
   );
+  wirePasswordToggles();
   document.getElementById("signup-form").addEventListener("submit", async function (e) {
     e.preventDefault();
     var email = document.getElementById("su-email").value.trim();
