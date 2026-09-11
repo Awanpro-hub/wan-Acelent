@@ -536,6 +536,7 @@ async function afterSignedIn() {
       state.myIdentity = mine.owner;
       await ensureInviteCode();
       enterApp();
+      showToast("歡迎回來，" + mine.displayName + "！");
     } else {
       state.authScreen = "setname";
       render();
