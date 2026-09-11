@@ -1,6 +1,6 @@
-# 極光行動（AWS Amplify 版）
+# 鯊魚日常（AWS Amplify 版）
 
-卓越團隊的分類名單 + 10-3-1 每日追蹤工具。這個版本部署在**你自己的 AWS 帳號**上，
+分類名單 + 10-3-1 每日追蹤工具，鯊魚不游就會死——這套工具就是幫你每天保持行動量。這個版本部署在**你自己的 AWS 帳號**上，
 用 Email/密碼登入（AWS Cognito），每個人的名單、聯絡記錄、工作規劃彼此獨立、互不可見，
 且跨裝置自動同步。
 
@@ -11,7 +11,7 @@ amplify/
   auth/resource.ts     # 帳號登入設定（Email + 密碼）
   data/resource.ts     # 資料表：Profile / Contact / CustomGroup / ContactLog / WorkPlan
   backend.ts           # 把上面兩個接起來
-index.html             # 頁面外觀（沿用「極光行動」的設計）
+index.html             # 頁面外觀（「鯊魚日常」的設計）
 src/main.js            # 前端邏輯：登入畫面、名單、10-3-1 追蹤
 amplify.yml            # 告訴 AWS Amplify Hosting 怎麼建置這個專案
 package.json           # 相依套件與建置指令
@@ -35,7 +35,7 @@ package.json           # 相依套件與建置指令
 cd aurora-action-amplify
 git init
 git add .
-git commit -m "極光行動：初始版本"
+git commit -m "鯊魚日常：初始版本"
 git branch -M main
 git remote add origin https://github.com/<你的帳號>/aurora-action.git
 git push -u origin main

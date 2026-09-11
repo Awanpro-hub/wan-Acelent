@@ -181,7 +181,7 @@ function exportRangeCsv(startKey, endKey) {
   var url = URL.createObjectURL(blob);
   var a = document.createElement("a");
   a.href = url;
-  a.download = "極光行動匯出_" + startKey + "_至_" + endKey + ".csv";
+  a.download = "鯊魚日常匯出_" + startKey + "_至_" + endKey + ".csv";
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -310,8 +310,8 @@ function renderAuthShell(inner) {
   var app = document.getElementById("app");
   app.innerHTML =
     '<div id="login-screen"><div class="login-card">' +
-    '<div class="login-mark">🔑</div>' +
-    "<h1>極光行動</h1>" +
+    '<div class="login-mark">🦈</div>' +
+    "<h1>鯊魚日常</h1>" +
     inner +
     "</div></div>";
 }
@@ -358,7 +358,7 @@ function renderSignIn() {
 
 function renderSignUp() {
   renderAuthShell(
-    '<p class="lede">建立你的極光行動帳號 —— 資料只有你自己看得到，且跨裝置同步。</p>' +
+    '<p class="lede">建立你的鯊魚日常帳號 —— 資料只有你自己看得到，且跨裝置同步。</p>' +
       '<form id="signup-form" class="stack">' +
       '<div><label class="field-label" for="su-email">Email</label>' +
       '<input class="text-input" id="su-email" type="email" required autocomplete="email" /></div>' +
@@ -910,7 +910,7 @@ function renderContactsView() {
     "</form></div>";
 
   return (
-    '<div class="page-head"><div><h2>分類名單</h2><p>把你認識的人放進對的分類，是「極光行動」第一步。</p></div></div>' +
+    '<div class="page-head"><div><h2>分類名單</h2><p>把你認識的人放進對的分類，是「鯊魚日常」第一步。</p></div></div>' +
     quickAdd +
     '<div class="group-grid">' +
     cards +
@@ -948,7 +948,7 @@ function render() {
   var app = document.getElementById("app");
   var name = state.profile ? state.profile.displayName : "";
   app.innerHTML =
-    '<div id="topbar"><div class="brand"><span class="mark">🔑</span>極光行動</div>' +
+    '<div id="topbar"><div class="brand"><span class="mark">🦈</span>鯊魚日常</div>' +
     '<nav><button data-view="contacts" class="' +
     (state.view === "contacts" ? "active" : "") +
     '">分類名單</button>' +
