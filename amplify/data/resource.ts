@@ -27,6 +27,17 @@ const schema = a.schema({
     })
     .authorization((allow) => [allow.owner()]),
 
+  // 瀏覽器推播訂閱資訊（只有自己看得到自己這台裝置的訂閱資料）。
+  // 後端的 push-notify function 是用原生 DynamoDB 讀取這張表（不透過這裡的授權規則），
+  // 這樣才能在「好友更新進度」時，找到「所有需要通知的人」的訂閱資料，不受限於單一使用者視角。
+  PushSubscription: a
+    .model({
+      endpoint: a.string().required(),
+      p256dh: a.string().required(),
+      authKey: a.string().required(),
+    })
+    .authorization((allow) => [allow.owner()]),
+
   // 好友對戰：每週的 10-3-1 統計快照。
   // viewers 是「我允許誰看到這筆資料」的名單（我加的好友），
   // 對方必須也把我加進他的好友，我們才會互相出現在彼此的 viewers 裡、互相看得到進度。

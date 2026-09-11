@@ -15,6 +15,18 @@ import outputs from "../amplify_outputs.json";
 Amplify.configure(outputs);
 const client = generateClient();
 
+// 跟 amplify/functions/push-notify/resource.ts 裡的 VAPID_PUBLIC_KEY 是同一組公鑰
+// （公鑰不是機密，本來就會出現在前端程式碼裡；私鑰只存在後端，不會出現在這裡）
+var VAPID_PUBLIC_KEY = "BPBXKCP8yALA6fURWlQmoyT6zab2t75p8a6UJDg8FAFOhiNXl4XLJH2BAz2Lr2-oMG2SKEOE1suCfY_qpJzcu8g";
+function urlBase64ToUint8Array(base64String) {
+  var padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  var rawData = atob(base64);
+  var outputArray = new Uint8Array(rawData.length);
+  for (var i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
 /* ===================== constants ===================== */
 var DEFAULT_GROUPS = [
   { id: "g1", name: "朋友", color: "var(--type-primary)" },
@@ -233,6 +245,9 @@ var state = {
   teamStats: [],
   battleNotice: false,
   addFriendErr: "",
+  pushSubs: [],
+  showPushTutorial: false,
+  pushBusy: false,
 };
 function genInviteCode() {
   var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉容易看錯的 0/O/1/I
@@ -324,6 +339,85 @@ function subscribeAll() {
       },
     })
   );
+  unsubs.push(
+    client.models.PushSubscription.observeQuery().subscribe({
+      next: function (r) {
+        state.pushSubs = r.items;
+        render();
+      },
+    })
+  );
+}
+
+/* ===================== 推播通知 ===================== */
+async function enablePush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    showToast("這個瀏覽器不支援推播通知");
+    return;
+  }
+  state.pushBusy = true;
+  render();
+  try {
+    var reg = await navigator.serviceWorker.register("/sw.js");
+    var existing = await reg.pushManager.getSubscription();
+    if (!existing) {
+      var perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        showToast("沒有允許通知權限，之後可以在瀏覽器/系統設定裡重新開啟");
+        state.pushBusy = false;
+        render();
+        return;
+      }
+      existing = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    var sub = existing.toJSON();
+    var already = state.pushSubs.some(function (s) {
+      return s.endpoint === sub.endpoint;
+    });
+    if (!already) {
+      await client.models.PushSubscription.create({
+        endpoint: sub.endpoint,
+        p256dh: sub.keys.p256dh,
+        authKey: sub.keys.auth,
+      });
+    }
+    showToast("推播通知已開啟！");
+  } catch (err) {
+    console.error(err);
+    showToast("開啟推播失敗，請確認瀏覽器有允許通知權限");
+  }
+  state.pushBusy = false;
+  render();
+}
+async function disablePush() {
+  state.pushBusy = true;
+  render();
+  try {
+    if ("serviceWorker" in navigator) {
+      var reg = await navigator.serviceWorker.getRegistration("/sw.js");
+      if (reg) {
+        var existing = await reg.pushManager.getSubscription();
+        if (existing) {
+          var endpoint = existing.endpoint;
+          await existing.unsubscribe();
+          var mine = state.pushSubs.filter(function (s) {
+            return s.endpoint === endpoint;
+          });
+          for (var i = 0; i < mine.length; i++) {
+            await client.models.PushSubscription.delete({ id: mine[i].id });
+          }
+        }
+      }
+    }
+    showToast("已關閉推播通知");
+  } catch (err) {
+    console.error(err);
+  }
+  state.pushBusy = false;
+  render();
 }
 
 /* ===================== 好友對戰 ===================== */
@@ -1310,11 +1404,44 @@ function renderBattleView() {
     '<input class="text-input" id="af-code" maxlength="6" placeholder="輸入好友的邀請碼" style="text-transform:uppercase" />' +
     '<button type="submit" class="btn btn-accent btn-sm">加好友</button></form>' +
     (state.addFriendErr ? '<div class="field-error">' + esc(state.addFriendErr) + "</div>" : "") +
-    '<p class="battle-tip">💡 目前是「軟通知」：隊友更新進度時，上面選單的「好友對戰」會出現紅點提醒；還沒有像手機推播那種沒開 App 也會跳通知的功能，需要的話之後可以再加。</p>' +
+    '<div class="push-row">' +
+    (state.pushSubs.length > 0
+      ? '<span class="push-status on">🔔 這台裝置的推播通知已開啟</span>' +
+        '<button class="btn btn-ghost btn-sm" id="push-disable-btn" type="button"' +
+        (state.pushBusy ? " disabled" : "") +
+        ">關閉</button>"
+      : '<span class="push-status">🔕 這台裝置還沒開啟推播通知</span>' +
+        '<button class="btn btn-accent btn-sm" id="push-info-btn" type="button">開啟推播通知</button>') +
+    "</div>" +
+    '<p class="battle-tip">💡 沒開啟推播的話，隊友更新進度時，上面選單的「好友對戰」還是會出現紅點提醒（打開 App 就看得到）。</p>' +
     "</div>" +
     '<div class="battle-list">' +
     cardsHtml +
-    "</div>"
+    "</div>" +
+    renderPushTutorial()
+  );
+}
+function renderPushTutorial() {
+  if (!state.showPushTutorial) return "";
+  var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  var isStandalone = window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+  return (
+    '<div class="modal-backdrop" id="push-tutorial-backdrop">' +
+    '<div class="modal-card">' +
+    '<h3>開啟推播通知</h3>' +
+    '<p>開啟之後，隊友更新本週 10-3-1 進度時，就算沒有打開 App，這台裝置也會跳出通知提醒你。</p>' +
+    (isIOS && !isStandalone
+      ? '<div class="modal-warn">📱 偵測到你可能是用 iPhone 的 Safari 瀏覽器打開這個網站——這種情況下收不到推播通知喔！<br/>請先點下方工具列的「分享」按鈕 → 選擇「加入主畫面」，之後改從主畫面的圖示打開 App，才能收到通知。</div>'
+      : "") +
+    '<ol class="modal-steps">' +
+    "<li>點下方「允許並開啟通知」</li>" +
+    "<li>瀏覽器會跳出權限詢問，選擇「允許」</li>" +
+    "<li>之後隊友更新進度，這台裝置就會跳通知</li>" +
+    "</ol>" +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-ghost btn-sm" id="push-tutorial-close" type="button">先不要</button>' +
+    '<button class="btn btn-accent btn-sm" id="push-tutorial-enable" type="button">允許並開啟通知</button>' +
+    "</div></div></div>"
   );
 }
 
@@ -1399,6 +1526,8 @@ function wireEvents() {
       state.myIdentity = "";
       state.battleNotice = false;
       state.addFriendErr = "";
+      state.pushSubs = [];
+      state.showPushTutorial = false;
       state.authScreen = "signin";
       render();
     });
@@ -1502,6 +1631,36 @@ function wireEvents() {
           state.addFriendErr = friendlyAuthError(err);
           render();
         }
+      });
+
+    var pushInfoBtn = document.getElementById("push-info-btn");
+    if (pushInfoBtn)
+      pushInfoBtn.addEventListener("click", function () {
+        state.showPushTutorial = true;
+        render();
+      });
+    var pushDisableBtn = document.getElementById("push-disable-btn");
+    if (pushDisableBtn) pushDisableBtn.addEventListener("click", disablePush);
+    var ptClose = document.getElementById("push-tutorial-close");
+    if (ptClose)
+      ptClose.addEventListener("click", function () {
+        state.showPushTutorial = false;
+        render();
+      });
+    var ptBackdrop = document.getElementById("push-tutorial-backdrop");
+    if (ptBackdrop)
+      ptBackdrop.addEventListener("click", function (e) {
+        if (e.target === ptBackdrop) {
+          state.showPushTutorial = false;
+          render();
+        }
+      });
+    var ptEnable = document.getElementById("push-tutorial-enable");
+    if (ptEnable)
+      ptEnable.addEventListener("click", function () {
+        state.showPushTutorial = false;
+        render();
+        enablePush();
       });
   }
 
