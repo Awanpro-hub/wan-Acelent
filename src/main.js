@@ -79,6 +79,64 @@ function wirePasswordToggles() {
     });
   });
 }
+function icsDateStamp() {
+  var d = new Date();
+  return (
+    d.getUTCFullYear() +
+    pad(d.getUTCMonth() + 1) +
+    pad(d.getUTCDate()) +
+    "T" +
+    pad(d.getUTCHours()) +
+    pad(d.getUTCMinutes()) +
+    pad(d.getUTCSeconds()) +
+    "Z"
+  );
+}
+function icsEscape(s) {
+  return String(s || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\n/g, "\\n");
+}
+function downloadIcsForPlan(p) {
+  var t = byV(PLAN_TYPES, p.planType) || PLAN_TYPES[0];
+  var dayKey = (p.planAt || "").slice(0, 10);
+  if (!dayKey) return;
+  var startD = new Date(dayKey + "T00:00:00");
+  var endD = new Date(startD);
+  endD.setDate(endD.getDate() + 1);
+  var startKey = dayKey.replace(/-/g, "");
+  var endKey = endD.getFullYear() + pad(endD.getMonth() + 1) + pad(endD.getDate());
+  var uid = "workplan-" + p.id + "@aurora-action";
+  var summary = "工作規劃：" + (p.contactName || "") + "（" + t.label + "）";
+  var lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Aurora Action//Work Plan//ZH-TW",
+    "CALSCALE:GREGORIAN",
+    "BEGIN:VEVENT",
+    "UID:" + uid,
+    "DTSTAMP:" + icsDateStamp(),
+    "DTSTART;VALUE=DATE:" + startKey,
+    "DTEND;VALUE=DATE:" + endKey,
+    "SUMMARY:" + icsEscape(summary),
+  ];
+  if (p.note) lines.push("DESCRIPTION:" + icsEscape(p.note));
+  lines.push("END:VEVENT", "END:VCALENDAR");
+  var ics = lines.join("\r\n") + "\r\n";
+  var blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "工作規劃-" + (p.contactName || "plan") + ".ics";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () {
+    URL.revokeObjectURL(url);
+  }, 4000);
+}
 function friendlyAuthError(err) {
   var name = (err && err.name) || "";
   var map = {
@@ -663,6 +721,9 @@ function entryHtmlPlan(p) {
     '<div class="e-time">' +
     esc((p.planAt || "").slice(0, 10)) +
     "</div></div>" +
+    '<button class="ics-btn" data-ics-plan="' +
+    p.id +
+    '" title="加入手機日曆">📅</button>' +
     '<button class="x-del" data-del-plan="' +
     p.id +
     '" title="刪除">✕</button></div>'
@@ -1002,6 +1063,18 @@ function wireEvents() {
     app.querySelectorAll("[data-del-plan]").forEach(function (btn) {
       btn.addEventListener("click", async function () {
         await client.models.WorkPlan.delete({ id: btn.getAttribute("data-del-plan") });
+      });
+    });
+    app.querySelectorAll("[data-ics-plan]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-ics-plan");
+        var plan = state.plans.filter(function (p) {
+          return p.id === id;
+        })[0];
+        if (plan) {
+          downloadIcsForPlan(plan);
+          showToast("已下載日曆檔，點開即可加入手機行事曆");
+        }
       });
     });
   }
