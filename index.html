@@ -383,14 +383,15 @@
   .seg-toggle button.active{background:var(--surface); color:var(--ink); box-shadow:var(--shadow);}
   .qa-head{display:flex; align-items:center; justify-content:space-between; gap:10px 14px; flex-wrap:wrap; margin-bottom:14px;}
   .qa-head h3{margin:0;}
-  .quick-add-contact{margin-bottom:16px; padding:14px;}
-  .qac-form{display:flex; gap:8px; flex-wrap:wrap;}
-  .qac-form input{flex:2 1 160px; padding:11px 14px; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--ink);}
-  .qac-form select{flex:1 1 130px; padding:11px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--ink);}
-  .qac-form .btn{flex:none;}
+  .quick-add-contact{margin-bottom:14px; padding:10px 12px; box-shadow:none;}
+  .qac-form{display:flex; gap:6px; flex-wrap:wrap; align-items:center;}
+  .qac-form input{flex:2 1 140px; padding:8px 12px; font-size:14px; border:1px solid var(--border); border-radius:9px; background:var(--bg); color:var(--ink);}
+  .qac-form select{flex:1 1 96px; padding:8px 10px; font-size:13.5px; border:1px solid var(--border); border-radius:9px; background:var(--bg); color:var(--ink);}
+  .qac-form .btn{flex:none; padding:0 16px;}
   @media (max-width: 480px){
-    .qac-form{flex-direction:column;}
-    .qac-form input, .qac-form select, .qac-form .btn{width:100%;}
+    .qac-form input{flex:1 1 100%;}
+    .qac-form select{flex:1 1 auto;}
+    .qac-form .btn{flex:1 1 auto;}
   }
 </style>
 </head>
