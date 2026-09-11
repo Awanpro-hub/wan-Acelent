@@ -137,6 +137,59 @@ function downloadIcsForPlan(p) {
     URL.revokeObjectURL(url);
   }, 4000);
 }
+function csvEscape(s) {
+  var v = String(s == null ? "" : s);
+  if (/[",\n]/.test(v)) {
+    v = '"' + v.replace(/"/g, '""') + '"';
+  }
+  return v;
+}
+function exportRangeCsv(startKey, endKey) {
+  var header = ["日期", "類別", "分類", "姓名", "備註"];
+  var data = [];
+  state.logs
+    .filter(function (l) {
+      var k = (l.loggedAt || "").slice(0, 10);
+      return k >= startKey && k <= endKey;
+    })
+    .forEach(function (l) {
+      var t = byV(LOG_TYPES, l.type) || LOG_TYPES[0];
+      data.push([(l.loggedAt || "").slice(0, 10), "聯絡記錄", t.label, l.contactName || "", l.note || ""]);
+    });
+  state.plans
+    .filter(function (p) {
+      var k = (p.planAt || "").slice(0, 10);
+      return k >= startKey && k <= endKey;
+    })
+    .forEach(function (p) {
+      var t = byV(PLAN_TYPES, p.planType) || PLAN_TYPES[0];
+      data.push([(p.planAt || "").slice(0, 10), "工作規劃", t.label, p.contactName || "", p.note || ""]);
+    });
+  data.sort(function (a, b) {
+    return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+  });
+  var rows = [header].concat(data);
+  var csv =
+    "﻿" +
+    rows
+      .map(function (r) {
+        return r.map(csvEscape).join(",");
+      })
+      .join("\r\n") +
+    "\r\n";
+  var blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "極光行動匯出_" + startKey + "_至_" + endKey + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () {
+    URL.revokeObjectURL(url);
+  }, 4000);
+  return data.length;
+}
 function friendlyAuthError(err) {
   var name = (err && err.name) || "";
   var map = {
@@ -170,6 +223,7 @@ var state = {
   trackerTab: "today",
   quickAddMode: "log",
   calendarOpen: false,
+  exportOpen: false,
 };
 var unsubs = [];
 function clearSubs() {
@@ -770,7 +824,30 @@ function renderTabs() {
     listHtml = filtered.length ? filtered.map(entryHtmlPlan).join("") : '<div class="empty-hint">目前沒有這個分類的對象。</div>';
   }
 
-  return '<div class="panel"><div class="tabs">' + tabsHtml + '</div><div class="entry-list">' + listHtml + "</div></div>";
+  var wk = weekRangeKeys(todayKey());
+  var exportHtml = state.exportOpen
+    ? '<div class="export-row">' +
+      '<input class="text-input" type="date" id="export-start" value="' +
+      wk[0] +
+      '"/>' +
+      '<span class="export-sep">至</span>' +
+      '<input class="text-input" type="date" id="export-end" value="' +
+      todayKey() +
+      '"/>' +
+      '<button type="button" class="btn btn-accent btn-sm" id="export-run">⬇ 匯出 CSV</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="export-toggle">收合</button>' +
+      "</div>"
+    : '<div class="export-row-compact"><button type="button" class="btn btn-ghost btn-sm" id="export-toggle">⬇ 匯出區間資料(CSV)</button></div>';
+
+  return (
+    '<div class="panel">' +
+    exportHtml +
+    '<div class="tabs">' +
+    tabsHtml +
+    '</div><div class="entry-list">' +
+    listHtml +
+    "</div></div>"
+  );
 }
 
 /* ===================== contacts view ===================== */
@@ -1055,6 +1132,28 @@ function wireEvents() {
         render();
       });
     });
+    var exportToggle = document.getElementById("export-toggle");
+    if (exportToggle)
+      exportToggle.addEventListener("click", function () {
+        state.exportOpen = !state.exportOpen;
+        render();
+      });
+    var exportRun = document.getElementById("export-run");
+    if (exportRun)
+      exportRun.addEventListener("click", function () {
+        var s = document.getElementById("export-start").value;
+        var e = document.getElementById("export-end").value;
+        if (!s || !e) {
+          showToast("請選擇日期區間");
+          return;
+        }
+        if (s > e) {
+          showToast("開始日期不能晚於結束日期");
+          return;
+        }
+        var count = exportRangeCsv(s, e);
+        showToast(count ? "已匯出 " + count + " 筆資料" : "這段期間沒有資料可匯出");
+      });
     app.querySelectorAll("[data-del-log]").forEach(function (btn) {
       btn.addEventListener("click", async function () {
         await client.models.ContactLog.delete({ id: btn.getAttribute("data-del-log") });
