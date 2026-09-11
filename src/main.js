@@ -1,0 +1,929 @@
+import { Amplify } from "aws-amplify";
+import {
+  signUp,
+  confirmSignUp,
+  resendSignUpCode,
+  signIn,
+  signOut,
+  getCurrentUser,
+} from "aws-amplify/auth";
+import { generateClient } from "aws-amplify/data";
+import outputs from "../amplify_outputs.json";
+
+Amplify.configure(outputs);
+const client = generateClient();
+
+/* ===================== constants ===================== */
+var DEFAULT_GROUPS = [
+  { id: "g1", name: "朋友", color: "var(--type-primary)" },
+  { id: "g2", name: "同事", color: "var(--type-secondary)" },
+  { id: "g3", name: "同學", color: "var(--type-status)" },
+  { id: "g4", name: "親戚", color: "var(--accent)" },
+  { id: "g5", name: "社團", color: "var(--type-other)" },
+  { id: "g6", name: "商家", color: "var(--type-primary)" },
+  { id: "g7", name: "鄰居", color: "var(--type-secondary)" },
+  { id: "g8", name: "其他", color: "var(--type-status)" },
+];
+var LOG_TYPES = [
+  { v: "4", label: "睡覺型／消費型顧客", target: 4, chip: "c4" },
+  { v: "3", label: "有狀態領導人", target: 3, chip: "c3" },
+  { v: "2", label: "經營型（一、二課）", target: 2, chip: "c2" },
+  { v: "1", label: "陌生／跟進中", target: 1, chip: "c1" },
+];
+var PLAN_TYPES = [
+  { v: "1", label: "主要對象", chip: "p1", minutes: "60-120 分鐘" },
+  { v: "2", label: "次要對象", chip: "p2", minutes: "15-30 分鐘" },
+  { v: "3", label: "有狀態對象", chip: "p3", minutes: "5-15 分鐘" },
+  { v: "4", label: "其他", chip: "p4", minutes: "" },
+];
+
+function byV(list, v) {
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].v === v) return list[i];
+  }
+  return null;
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function pad(n) {
+  return n < 10 ? "0" + n : "" + n;
+}
+function todayKey() {
+  var d = new Date();
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+function fmtDateHuman(key) {
+  var p = key.split("-");
+  return p[0] + "年" + parseInt(p[1], 10) + "月" + parseInt(p[2], 10) + "日";
+}
+function showToast(msg) {
+  var t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(function () {
+    t.classList.remove("show");
+  }, 2400);
+}
+function friendlyAuthError(err) {
+  var name = (err && err.name) || "";
+  var map = {
+    UsernameExistsException: "這個 Email 已經註冊過了，請直接登入。",
+    NotAuthorizedException: "Email 或密碼不正確。",
+    UserNotFoundException: "找不到這個帳號，請確認 Email 或先註冊。",
+    UserNotConfirmedException: "這個帳號還沒完成驗證，請輸入收到的驗證碼。",
+    CodeMismatchException: "驗證碼不正確，請再確認一次。",
+    ExpiredCodeException: "驗證碼已過期，請重新寄送。",
+    InvalidPasswordException: "密碼不符合規則，請至少 8 碼並包含大小寫字母與數字。",
+    LimitExceededException: "操作太頻繁了，請稍後再試。",
+    InvalidParameterException: "請確認輸入的 Email 格式正確。",
+  };
+  return map[name] || (err && err.message) || "發生錯誤，請再試一次。";
+}
+
+/* ===================== state ===================== */
+var state = {
+  authScreen: "loading", // loading | signin | signup | confirm | setname | app
+  pendingEmail: "",
+  pendingPassword: "",
+  profile: null,
+  view: "contacts",
+  contacts: [],
+  customGroups: [],
+  logs: [],
+  plans: [],
+  calYear: new Date().getFullYear(),
+  calMonth: new Date().getMonth(),
+  selectedDate: todayKey(),
+  trackerTab: "today",
+};
+var unsubs = [];
+function clearSubs() {
+  unsubs.forEach(function (u) {
+    try {
+      u.unsubscribe();
+    } catch (e) {}
+  });
+  unsubs = [];
+}
+
+/* ===================== data layer ===================== */
+function subscribeAll() {
+  clearSubs();
+  unsubs.push(
+    client.models.Contact.observeQuery().subscribe({
+      next: function (r) {
+        state.contacts = r.items;
+        render();
+      },
+    })
+  );
+  unsubs.push(
+    client.models.CustomGroup.observeQuery().subscribe({
+      next: function (r) {
+        state.customGroups = r.items;
+        render();
+      },
+    })
+  );
+  unsubs.push(
+    client.models.ContactLog.observeQuery().subscribe({
+      next: function (r) {
+        state.logs = r.items;
+        render();
+      },
+    })
+  );
+  unsubs.push(
+    client.models.WorkPlan.observeQuery().subscribe({
+      next: function (r) {
+        state.plans = r.items;
+        render();
+      },
+    })
+  );
+}
+
+async function enterApp() {
+  state.authScreen = "app";
+  subscribeAll();
+  render();
+}
+
+async function afterSignedIn() {
+  try {
+    var res = await client.models.Profile.list();
+    if (res.data && res.data.length > 0) {
+      state.profile = res.data[0];
+      enterApp();
+    } else {
+      state.authScreen = "setname";
+      render();
+    }
+  } catch (e) {
+    console.error(e);
+    state.authScreen = "setname";
+    render();
+  }
+}
+
+async function checkSession() {
+  try {
+    await getCurrentUser();
+    await afterSignedIn();
+  } catch (e) {
+    state.authScreen = "signin";
+    render();
+  }
+}
+
+/* ===================== auth screens ===================== */
+function renderAuthShell(inner) {
+  var app = document.getElementById("app");
+  app.innerHTML =
+    '<div id="login-screen"><div class="login-card">' +
+    '<div class="login-mark">🔑</div>' +
+    "<h1>極光行動</h1>" +
+    inner +
+    "</div></div>";
+}
+
+function renderLoading() {
+  document.getElementById("app").innerHTML = '<div class="loading-screen">載入中…</div>';
+}
+
+function renderSignIn() {
+  renderAuthShell(
+    '<p class="lede">卓越團隊的名單本與 10-3-1 每日追蹤。用你的 Email 登入。</p>' +
+      '<form id="signin-form" class="stack">' +
+      '<div><label class="field-label" for="si-email">Email</label>' +
+      '<input class="text-input" id="si-email" type="email" required autocomplete="email" /></div>' +
+      '<div><label class="field-label" for="si-pw">密碼</label>' +
+      '<input class="text-input" id="si-pw" type="password" required autocomplete="current-password" /></div>' +
+      '<div class="field-error" id="si-err"></div>' +
+      '<button type="submit" class="btn btn-accent btn-block">登入</button>' +
+      "</form>" +
+      '<div class="auth-toggle">還沒有帳號？<button id="go-signup" type="button">建立一個</button></div>'
+  );
+  document.getElementById("signin-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var email = document.getElementById("si-email").value.trim();
+    var pw = document.getElementById("si-pw").value;
+    var errEl = document.getElementById("si-err");
+    errEl.textContent = "";
+    try {
+      await signIn({ username: email, password: pw });
+      renderLoading();
+      await afterSignedIn();
+    } catch (err) {
+      errEl.textContent = friendlyAuthError(err);
+    }
+  });
+  document.getElementById("go-signup").addEventListener("click", function () {
+    state.authScreen = "signup";
+    render();
+  });
+}
+
+function renderSignUp() {
+  renderAuthShell(
+    '<p class="lede">建立你的極光行動帳號 —— 資料只有你自己看得到，且跨裝置同步。</p>' +
+      '<form id="signup-form" class="stack">' +
+      '<div><label class="field-label" for="su-email">Email</label>' +
+      '<input class="text-input" id="su-email" type="email" required autocomplete="email" /></div>' +
+      '<div><label class="field-label" for="su-pw">密碼</label>' +
+      '<input class="text-input" id="su-pw" type="password" required minlength="8" autocomplete="new-password" placeholder="至少 8 碼，含大小寫字母與數字" /></div>' +
+      '<div class="field-error" id="su-err"></div>' +
+      '<button type="submit" class="btn btn-accent btn-block">註冊</button>' +
+      "</form>" +
+      '<div class="auth-toggle">已經有帳號了？<button id="go-signin" type="button">直接登入</button></div>'
+  );
+  document.getElementById("signup-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var email = document.getElementById("su-email").value.trim();
+    var pw = document.getElementById("su-pw").value;
+    var errEl = document.getElementById("su-err");
+    errEl.textContent = "";
+    try {
+      await signUp({
+        username: email,
+        password: pw,
+        options: { userAttributes: { email: email } },
+      });
+      state.pendingEmail = email;
+      state.pendingPassword = pw;
+      state.authScreen = "confirm";
+      render();
+    } catch (err) {
+      errEl.textContent = friendlyAuthError(err);
+    }
+  });
+  document.getElementById("go-signin").addEventListener("click", function () {
+    state.authScreen = "signin";
+    render();
+  });
+}
+
+function renderConfirm() {
+  renderAuthShell(
+    '<p class="lede">我們寄了一組 6 位數驗證碼到 <b>' +
+      esc(state.pendingEmail) +
+      "</b>，請輸入。</p>" +
+      '<form id="confirm-form" class="stack">' +
+      '<div><label class="field-label" for="cf-code">驗證碼</label>' +
+      '<input class="text-input code-input" id="cf-code" inputmode="numeric" maxlength="6" required /></div>' +
+      '<div class="field-error" id="cf-err"></div>' +
+      '<button type="submit" class="btn btn-accent btn-block">確認</button>' +
+      "</form>" +
+      '<div class="auth-toggle"><button id="cf-resend" type="button">重新寄送驗證碼</button></div>'
+  );
+  document.getElementById("confirm-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var code = document.getElementById("cf-code").value.trim();
+    var errEl = document.getElementById("cf-err");
+    errEl.textContent = "";
+    try {
+      await confirmSignUp({ username: state.pendingEmail, confirmationCode: code });
+      renderLoading();
+      try {
+        await signIn({ username: state.pendingEmail, password: state.pendingPassword });
+        state.pendingPassword = "";
+        await afterSignedIn();
+      } catch (e2) {
+        state.authScreen = "signin";
+        render();
+        showToast("驗證成功，請重新登入");
+      }
+    } catch (err) {
+      errEl.textContent = friendlyAuthError(err);
+    }
+  });
+  document.getElementById("cf-resend").addEventListener("click", async function () {
+    try {
+      await resendSignUpCode({ username: state.pendingEmail });
+      showToast("已重新寄送驗證碼");
+    } catch (err) {
+      showToast(friendlyAuthError(err));
+    }
+  });
+}
+
+function renderSetName() {
+  renderAuthShell(
+    '<p class="lede">最後一步：你希望團隊夥伴看到的名字是？</p>' +
+      '<form id="setname-form" class="stack">' +
+      '<div><label class="field-label" for="sn-name">姓名</label>' +
+      '<input class="text-input" id="sn-name" maxlength="20" required placeholder="例如：李承諭" /></div>' +
+      '<div class="field-error" id="sn-err"></div>' +
+      '<button type="submit" class="btn btn-accent btn-block">開始使用</button>' +
+      "</form>"
+  );
+  document.getElementById("setname-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var name = document.getElementById("sn-name").value.trim();
+    if (!name) return;
+    var errEl = document.getElementById("sn-err");
+    try {
+      var res = await client.models.Profile.create({ displayName: name });
+      state.profile = res.data;
+      enterApp();
+    } catch (err) {
+      errEl.textContent = friendlyAuthError(err);
+    }
+  });
+}
+
+/* ===================== quota computations ===================== */
+function logsOn(dateKey) {
+  return state.logs.filter(function (l) {
+    return (l.loggedAt || "").slice(0, 10) === dateKey;
+  });
+}
+function plansOn(dateKey) {
+  return state.plans.filter(function (p) {
+    return (p.planAt || "").slice(0, 10) === dateKey;
+  });
+}
+function weekRangeKeys(dateKey) {
+  var d = new Date(dateKey + "T00:00:00");
+  var dow = (d.getDay() + 6) % 7;
+  var start = new Date(d);
+  start.setDate(d.getDate() - dow);
+  var keys = [];
+  for (var i = 0; i < 7; i++) {
+    var x = new Date(start);
+    x.setDate(start.getDate() + i);
+    keys.push(x.getFullYear() + "-" + pad(x.getMonth() + 1) + "-" + pad(x.getDate()));
+  }
+  return keys;
+}
+
+function renderQuota() {
+  var tk = todayKey();
+  var todaysLogs = logsOn(tk);
+  var totalLogs = todaysLogs.length;
+  var byType = { 4: 0, 3: 0, 2: 0, 1: 0 };
+  todaysLogs.forEach(function (l) {
+    if (byType[l.type] !== undefined) byType[l.type]++;
+  });
+
+  var todaysPlans = plansOn(tk);
+  var haveType = { 1: false, 2: false, 3: false };
+  todaysPlans.forEach(function (p) {
+    if (haveType[p.planType] !== undefined) haveType[p.planType] = true;
+  });
+  var apptCount = (haveType[1] ? 1 : 0) + (haveType[2] ? 1 : 0) + (haveType[3] ? 1 : 0);
+
+  var wk = weekRangeKeys(tk);
+  var weekStrangers = state.logs.filter(function (l) {
+    return l.type === "1" && wk.indexOf((l.loggedAt || "").slice(0, 10)) > -1;
+  }).length;
+
+  var barColor = { c4: "type-other", c3: "type-status", c2: "type-secondary", c1: "type-primary" };
+  var barsHtml = LOG_TYPES.map(function (t) {
+    var v = byType[t.v] || 0;
+    var pct = Math.min(100, Math.round((v / t.target) * 100));
+    return (
+      '<div class="seg" title="' +
+      t.label +
+      " " +
+      v +
+      "/" +
+      t.target +
+      '"><i style="width:' +
+      pct +
+      "%;background:var(--" +
+      barColor[t.chip] +
+      ')"></i></div>'
+    );
+  }).join("");
+
+  var dotColor = { p1: "type-primary", p2: "type-secondary", p3: "type-status" };
+  var dotsHtml = ["1", "2", "3"]
+    .map(function (k) {
+      var t = byV(PLAN_TYPES, k);
+      var filled = haveType[k];
+      var bg = filled ? "var(--" + dotColor[t.chip] + ")" : "transparent";
+      return (
+        '<div class="slot' +
+        (filled ? " filled" : "") +
+        '" style="background:' +
+        bg +
+        '" title="' +
+        t.label +
+        '">' +
+        (filled ? "✓" : "") +
+        "</div>"
+      );
+    })
+    .join("");
+
+  return (
+    '<div class="quota-row">' +
+    '<div class="quota-card">' +
+    '<div class="q-label">今日有效聯絡 · 第一把 10+3+1</div>' +
+    '<div class="q-num">' +
+    totalLogs +
+    " <small>/ 10</small></div>" +
+    '<div class="q-sub">4 消費型・3 有狀態・2 一二課・1 陌生</div>' +
+    '<div class="q-bar">' +
+    barsHtml +
+    "</div></div>" +
+    '<div class="quota-card">' +
+    '<div class="q-label">今日約會 · 第二把 1+1+1</div>' +
+    '<div class="q-num">' +
+    apptCount +
+    " <small>/ 3</small></div>" +
+    '<div class="q-sub">主要・次要・有狀態，各一位</div>' +
+    '<div class="q-dots">' +
+    dotsHtml +
+    "</div></div>" +
+    '<div class="quota-card">' +
+    '<div class="q-label">本週新識陌生人</div>' +
+    '<div class="q-num">' +
+    weekStrangers +
+    " <small>/ 1</small></div>" +
+    '<div class="q-sub">每週至少認識一位新朋友</div>' +
+    '<div class="q-bar"><div class="seg"><i style="width:' +
+    Math.min(100, weekStrangers * 100) +
+    '%;background:var(--accent)"></i></div></div>' +
+    "</div></div>"
+  );
+}
+
+/* ===================== calendar ===================== */
+function renderCalendar() {
+  var y = state.calYear,
+    m = state.calMonth;
+  var first = new Date(y, m, 1);
+  var startOffset = (first.getDay() + 6) % 7;
+  var daysInMonth = new Date(y, m + 1, 0).getDate();
+  var tk = todayKey();
+  var colorVarMap = { p1: "type-primary", p2: "type-secondary", p3: "type-status", p4: "type-other" };
+
+  var cells = "";
+  for (var i = 0; i < startOffset; i++) {
+    cells += '<div class="cal-cell blank"></div>';
+  }
+  for (var d = 1; d <= daysInMonth; d++) {
+    var key = y + "-" + pad(m + 1) + "-" + pad(d);
+    var dayLogs = logsOn(key);
+    var dayPlans = plansOn(key);
+    var typesPresent = {};
+    dayPlans.forEach(function (p) {
+      typesPresent[p.planType] = true;
+    });
+    var dotHtml = Object.keys(typesPresent)
+      .sort()
+      .map(function (k) {
+        var t = byV(PLAN_TYPES, k);
+        return '<span style="background:var(--' + colorVarMap[t.chip] + ')"></span>';
+      })
+      .join("");
+    var cls = "cal-cell";
+    if (key === tk) cls += " today";
+    if (key === state.selectedDate) cls += " selected";
+    cells +=
+      '<button type="button" class="' +
+      cls +
+      '" data-date="' +
+      key +
+      '"><span class="dnum">' +
+      d +
+      "</span>" +
+      (dayLogs.length ? '<span style="font-size:10px;color:var(--ink-faint)">' + dayLogs.length + " 聯絡</span>" : "") +
+      '<span class="cal-dots">' +
+      dotHtml +
+      "</span></button>";
+  }
+  var dows = ["一", "二", "三", "四", "五", "六", "日"];
+  var dowHtml = dows.map(function (x) {
+    return '<div class="dow">' + x + "</div>";
+  }).join("");
+
+  return (
+    '<div class="panel">' +
+    '<div class="cal-nav">' +
+    '<button class="btn btn-ghost btn-sm" id="cal-prev">← 上個月</button>' +
+    '<div class="ym">' +
+    y +
+    " 年 " +
+    (m + 1) +
+    " 月</div>" +
+    '<button class="btn btn-ghost btn-sm" id="cal-next">下個月 →</button>' +
+    "</div>" +
+    '<div class="cal-grid">' +
+    dowHtml +
+    cells +
+    "</div>" +
+    '<div class="legend">' +
+    PLAN_TYPES.map(function (t) {
+      return '<div class="li"><span class="sw" style="background:var(--' + colorVarMap[t.chip] + ')"></span>' + t.label + "</div>";
+    }).join("") +
+    "</div></div>"
+  );
+}
+
+/* ===================== forms ===================== */
+function contactOptionsHtml() {
+  return state.contacts
+    .map(function (c) {
+      return '<option value="' + esc(c.name) + '">';
+    })
+    .join("");
+}
+
+function renderLogForm() {
+  var typeOpts = LOG_TYPES.map(function (t) {
+    return '<option value="' + t.v + '">' + t.v + "：" + esc(t.label) + "</option>";
+  }).join("");
+  return (
+    '<div class="panel"><h3>新增今日聯絡 <span class="hint">選取日期：' +
+    fmtDateHuman(state.selectedDate) +
+    '</span></h3>' +
+    '<form class="stack" id="log-form">' +
+    '<div><label class="sub">對象姓名</label>' +
+    '<input class="text-input" list="contact-names" name="name" placeholder="輸入或從名單選擇" required style="margin-top:4px;"/></div>' +
+    '<div class="row2">' +
+    '<div><label class="sub">分類（4321）</label><select name="type" style="margin-top:4px;">' +
+    typeOpts +
+    "</select></div>" +
+    '<div><label class="sub">聯絡時間</label><input class="text-input" type="time" name="time" value="16:00" style="margin-top:4px;"/></div>' +
+    "</div>" +
+    '<div><label class="sub">內容備註</label><textarea name="note" placeholder="聊了什麼、下一步…" style="margin-top:4px;"></textarea></div>' +
+    '<button class="btn btn-accent" type="submit">送出聯絡記錄</button>' +
+    "</form></div>"
+  );
+}
+
+function renderPlanForm() {
+  var typeOpts = PLAN_TYPES.map(function (t) {
+    return '<option value="' + t.v + '">' + esc(t.label) + (t.minutes ? "（" + t.minutes + "）" : "") + "</option>";
+  }).join("");
+  return (
+    '<div class="panel"><h3>新增工作規劃 <span class="hint">第二把 1+1+1</span></h3>' +
+    '<form class="stack" id="plan-form">' +
+    '<div><label class="sub">對象姓名</label>' +
+    '<input class="text-input" list="contact-names" name="name" placeholder="輸入或從名單選擇" required style="margin-top:4px;"/></div>' +
+    '<div class="row2">' +
+    '<div><label class="sub">類型</label><select name="planType" style="margin-top:4px;">' +
+    typeOpts +
+    "</select></div>" +
+    '<div><label class="sub">安排日期</label><input class="text-input" type="date" name="date" value="' +
+    state.selectedDate +
+    '" style="margin-top:4px;"/></div>' +
+    "</div>" +
+    '<div><label class="sub">工作內容</label><textarea name="note" placeholder="約會地點、要談的內容…" style="margin-top:4px;"></textarea></div>' +
+    '<button class="btn btn-accent" type="submit">送出工作規劃</button>' +
+    "</form></div>"
+  );
+}
+
+/* ===================== lists / tabs ===================== */
+function entryHtmlLog(l) {
+  var t = byV(LOG_TYPES, l.type) || LOG_TYPES[0];
+  return (
+    '<div class="entry"><span class="chip ' +
+    t.chip +
+    '">' +
+    t.v +
+    '</span><div class="e-main"><div class="e-name">' +
+    esc(l.contactName) +
+    "</div>" +
+    (l.note ? '<div class="e-note">' + esc(l.note) + "</div>" : "") +
+    '<div class="e-time">' +
+    esc((l.loggedAt || "").replace("T", " ").slice(0, 16)) +
+    "</div></div>" +
+    '<button class="x-del" data-del-log="' +
+    l.id +
+    '" title="刪除">✕</button></div>'
+  );
+}
+function entryHtmlPlan(p) {
+  var t = byV(PLAN_TYPES, p.planType) || PLAN_TYPES[0];
+  return (
+    '<div class="entry"><span class="chip ' +
+    t.chip +
+    '">' +
+    esc(t.label) +
+    '</span><div class="e-main"><div class="e-name">' +
+    esc(p.contactName) +
+    "</div>" +
+    (p.note ? '<div class="e-note">' + esc(p.note) + "</div>" : "") +
+    '<div class="e-time">' +
+    esc((p.planAt || "").slice(0, 10)) +
+    "</div></div>" +
+    '<button class="x-del" data-del-plan="' +
+    p.id +
+    '" title="刪除">✕</button></div>'
+  );
+}
+
+function renderTabs() {
+  var tabs = [
+    { k: "today", label: "當日聯絡" },
+    { k: "plans", label: "工作規劃" },
+    { k: "p1", label: "主要對象" },
+    { k: "p2", label: "次要對象" },
+    { k: "p3", label: "有狀態對象" },
+    { k: "p4", label: "其他" },
+  ];
+  var tabsHtml = tabs
+    .map(function (t) {
+      return '<button data-tab="' + t.k + '" class="' + (state.trackerTab === t.k ? "active" : "") + '">' + t.label + "</button>";
+    })
+    .join("");
+
+  var listHtml = "";
+  if (state.trackerTab === "today") {
+    var todays = logsOn(state.selectedDate)
+      .slice()
+      .sort(function (a, b) {
+        return (a.loggedAt || "") < (b.loggedAt || "") ? 1 : -1;
+      });
+    listHtml = todays.length ? todays.map(entryHtmlLog).join("") : '<div class="empty-hint">' + fmtDateHuman(state.selectedDate) + " 還沒有聯絡記錄。</div>";
+  } else if (state.trackerTab === "plans") {
+    var allPlans = state.plans.slice().sort(function (a, b) {
+      return (a.planAt || "") < (b.planAt || "") ? -1 : 1;
+    });
+    listHtml = allPlans.length ? allPlans.map(entryHtmlPlan).join("") : '<div class="empty-hint">還沒有工作規劃。</div>';
+  } else {
+    var pv = state.trackerTab.slice(1);
+    var filtered = state.plans
+      .filter(function (p) {
+        return p.planType === pv;
+      })
+      .sort(function (a, b) {
+        return (a.planAt || "") < (b.planAt || "") ? -1 : 1;
+      });
+    listHtml = filtered.length ? filtered.map(entryHtmlPlan).join("") : '<div class="empty-hint">目前沒有這個分類的對象。</div>';
+  }
+
+  return '<div class="panel"><div class="tabs">' + tabsHtml + '</div><div class="entry-list">' + listHtml + "</div></div>";
+}
+
+/* ===================== contacts view ===================== */
+function allGroups() {
+  return DEFAULT_GROUPS.concat(
+    state.customGroups.map(function (g) {
+      return { id: g.id, name: g.name, color: "var(--accent)" };
+    })
+  );
+}
+function contactsInGroup(gid) {
+  return state.contacts.filter(function (c) {
+    return c.groupId === gid;
+  });
+}
+
+function renderContactsView() {
+  var groups = allGroups();
+  var cards = groups
+    .map(function (g) {
+      var list = contactsInGroup(g.id);
+      var rows = list.length
+        ? list
+            .map(function (c) {
+              return '<div class="contact-row"><span>' + esc(c.name) + '</span><button class="x-del" data-del-contact="' + c.id + '" title="刪除">✕</button></div>';
+            })
+            .join("")
+        : '<div class="empty-hint">尚無名單</div>';
+      return (
+        '<div class="group-card"><div class="g-head"><div class="g-title"><span class="g-dot" style="background:' +
+        g.color +
+        '"></span>' +
+        esc(g.name) +
+        '</div><span class="g-count">' +
+        list.length +
+        ' 人</span></div><div class="g-body">' +
+        rows +
+        '</div><form class="g-add" data-add-to="' +
+        g.id +
+        '" data-group-name="' +
+        esc(g.name) +
+        '"><input type="text" placeholder="新增姓名" maxlength="20" required /><button class="btn btn-accent btn-sm" type="submit">新增</button></form></div>'
+      );
+    })
+    .join("");
+
+  var addGroupCard =
+    '<div class="add-group-card"><form id="add-group-form">' +
+    '<input type="text" placeholder="自訂群組名稱，如：教會、球隊" maxlength="12" required />' +
+    '<button class="btn btn-ghost btn-sm" type="submit">＋ 新增群組</button></form></div>';
+
+  return (
+    '<div class="page-head"><div><h2>分類名單</h2><p>把你認識的人放進對的分類，是「極光行動」第一步。</p></div></div>' +
+    '<div class="group-grid">' +
+    cards +
+    addGroupCard +
+    "</div>"
+  );
+}
+
+/* ===================== tracker view ===================== */
+function renderTrackerView() {
+  return (
+    '<div class="page-head"><div><h2>10-3-1 每日追蹤</h2><p>每天 10 個有效聯絡、3 個約會、每週 1 位新朋友 — 卓越八把金鑰匙第一、二把。</p></div></div>' +
+    renderQuota() +
+    '<div class="tracker-grid"><div>' +
+    renderCalendar() +
+    "</div><div>" +
+    renderLogForm() +
+    renderPlanForm() +
+    "</div></div>" +
+    '<div style="height:20px"></div>' +
+    renderTabs() +
+    '<datalist id="contact-names">' +
+    contactOptionsHtml() +
+    "</datalist>"
+  );
+}
+
+/* ===================== shell + wiring ===================== */
+function render() {
+  if (state.authScreen === "loading") return renderLoading();
+  if (state.authScreen === "signin") return renderSignIn();
+  if (state.authScreen === "signup") return renderSignUp();
+  if (state.authScreen === "confirm") return renderConfirm();
+  if (state.authScreen === "setname") return renderSetName();
+
+  var app = document.getElementById("app");
+  var name = state.profile ? state.profile.displayName : "";
+  app.innerHTML =
+    '<div id="topbar"><div class="brand"><span class="mark">🔑</span>極光行動</div>' +
+    '<nav><button data-view="contacts" class="' +
+    (state.view === "contacts" ? "active" : "") +
+    '">分類名單</button>' +
+    '<button data-view="tracker" class="' +
+    (state.view === "tracker" ? "active" : "") +
+    '">10-3-1 追蹤</button></nav>' +
+    '<div class="spacer"></div>' +
+    '<div class="whoami"><span class="badge-mode live">● 團隊同步中</span><span>你好，<b>' +
+    esc(name) +
+    '</b></span><button class="btn btn-ghost btn-sm" id="sign-out-btn">登出</button></div></div>' +
+    "<main>" +
+    (state.view === "contacts" ? renderContactsView() : renderTrackerView()) +
+    "</main>" +
+    '<div class="footer-note">資料儲存在你自己的 AWS 帳號中，只有你看得到，登入後可跨裝置同步。</div>';
+
+  wireEvents();
+}
+
+function wireEvents() {
+  var app = document.getElementById("app");
+
+  app.querySelectorAll("#topbar nav button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.view = b.getAttribute("data-view");
+      render();
+    });
+  });
+
+  var so = document.getElementById("sign-out-btn");
+  if (so)
+    so.addEventListener("click", async function () {
+      clearSubs();
+      await signOut();
+      state.contacts = [];
+      state.customGroups = [];
+      state.logs = [];
+      state.plans = [];
+      state.profile = null;
+      state.authScreen = "signin";
+      render();
+    });
+
+  if (state.view === "contacts") {
+    app.querySelectorAll("[data-add-to]").forEach(function (form) {
+      form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var input = form.querySelector("input");
+        var name = input.value.trim();
+        if (!name) return;
+        try {
+          await client.models.Contact.create({
+            name: name,
+            groupId: form.getAttribute("data-add-to"),
+            groupName: form.getAttribute("data-group-name"),
+          });
+          input.value = "";
+          showToast("已加入「" + form.getAttribute("data-group-name") + "」");
+        } catch (err) {
+          showToast(friendlyAuthError(err));
+        }
+      });
+    });
+    var agf = document.getElementById("add-group-form");
+    if (agf)
+      agf.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var input = agf.querySelector("input");
+        var name = input.value.trim();
+        if (!name) return;
+        await client.models.CustomGroup.create({ name: name });
+        input.value = "";
+      });
+    app.querySelectorAll("[data-del-contact]").forEach(function (btn) {
+      btn.addEventListener("click", async function () {
+        await client.models.Contact.delete({ id: btn.getAttribute("data-del-contact") });
+      });
+    });
+  }
+
+  if (state.view === "tracker") {
+    var prev = document.getElementById("cal-prev");
+    var next = document.getElementById("cal-next");
+    if (prev)
+      prev.addEventListener("click", function () {
+        state.calMonth--;
+        if (state.calMonth < 0) {
+          state.calMonth = 11;
+          state.calYear--;
+        }
+        render();
+      });
+    if (next)
+      next.addEventListener("click", function () {
+        state.calMonth++;
+        if (state.calMonth > 11) {
+          state.calMonth = 0;
+          state.calYear++;
+        }
+        render();
+      });
+    app.querySelectorAll(".cal-cell:not(.blank)").forEach(function (cell) {
+      cell.addEventListener("click", function () {
+        state.selectedDate = cell.getAttribute("data-date");
+        render();
+      });
+    });
+
+    var lf = document.getElementById("log-form");
+    if (lf)
+      lf.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var fd = new FormData(lf);
+        var name = (fd.get("name") || "").toString().trim();
+        if (!name) return;
+        var time = (fd.get("time") || "16:00").toString();
+        try {
+          await client.models.ContactLog.create({
+            contactName: name,
+            type: fd.get("type").toString(),
+            note: (fd.get("note") || "").toString().trim(),
+            loggedAt: state.selectedDate + "T" + time,
+          });
+          showToast("已記錄聯絡");
+          lf.reset();
+        } catch (err) {
+          showToast(friendlyAuthError(err));
+        }
+      });
+
+    var pf = document.getElementById("plan-form");
+    if (pf)
+      pf.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var fd = new FormData(pf);
+        var name = (fd.get("name") || "").toString().trim();
+        if (!name) return;
+        var date = (fd.get("date") || state.selectedDate).toString();
+        try {
+          await client.models.WorkPlan.create({
+            contactName: name,
+            planType: fd.get("planType").toString(),
+            note: (fd.get("note") || "").toString().trim(),
+            planAt: date + "T00:00",
+          });
+          showToast("已加入工作規劃");
+          pf.reset();
+        } catch (err) {
+          showToast(friendlyAuthError(err));
+        }
+      });
+
+    app.querySelectorAll("[data-tab]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.trackerTab = btn.getAttribute("data-tab");
+        render();
+      });
+    });
+    app.querySelectorAll("[data-del-log]").forEach(function (btn) {
+      btn.addEventListener("click", async function () {
+        await client.models.ContactLog.delete({ id: btn.getAttribute("data-del-log") });
+      });
+    });
+    app.querySelectorAll("[data-del-plan]").forEach(function (btn) {
+      btn.addEventListener("click", async function () {
+        await client.models.WorkPlan.delete({ id: btn.getAttribute("data-del-plan") });
+      });
+    });
+  }
+}
+
+/* ===================== boot ===================== */
+renderLoading();
+checkSession();

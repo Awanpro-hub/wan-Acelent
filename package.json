@@ -1,0 +1,22 @@
+{
+  "name": "aurora-action",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "極光行動 — 卓越團隊的分類名單與 10-3-1 每日追蹤工具（AWS Amplify 版）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "sandbox": "ampx sandbox"
+  },
+  "dependencies": {
+    "aws-amplify": "^6.6.0"
+  },
+  "devDependencies": {
+    "@aws-amplify/backend": "^1.10.0",
+    "@aws-amplify/backend-cli": "^1.4.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}
