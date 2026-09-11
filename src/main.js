@@ -6,6 +6,8 @@ import {
   signIn,
   signOut,
   getCurrentUser,
+  resetPassword,
+  confirmResetPassword,
 } from "aws-amplify/auth";
 import { generateClient } from "aws-amplify/data";
 import outputs from "../amplify_outputs.json";
@@ -208,9 +210,10 @@ function friendlyAuthError(err) {
 
 /* ===================== state ===================== */
 var state = {
-  authScreen: "loading", // loading | signin | signup | confirm | setname | app
+  authScreen: "loading", // loading | signin | signup | confirm | forgot | reset | setname | app
   pendingEmail: "",
   pendingPassword: "",
+  pendingResetEmail: "",
   profile: null,
   view: "contacts",
   contacts: [],
@@ -333,7 +336,8 @@ function renderSignIn() {
       '<div class="field-error" id="si-err"></div>' +
       '<button type="submit" class="btn btn-accent btn-block">登入</button>' +
       "</form>" +
-      '<div class="auth-toggle">還沒有帳號？<button id="go-signup" type="button">建立一個</button></div>'
+      '<div class="auth-toggle">還沒有帳號？<button id="go-signup" type="button">建立一個</button></div>' +
+      '<div class="auth-toggle"><button id="go-forgot" type="button">忘記密碼？</button></div>'
   );
   wirePasswordToggles();
   document.getElementById("signin-form").addEventListener("submit", async function (e) {
@@ -352,6 +356,94 @@ function renderSignIn() {
   });
   document.getElementById("go-signup").addEventListener("click", function () {
     state.authScreen = "signup";
+    render();
+  });
+  document.getElementById("go-forgot").addEventListener("click", function () {
+    state.authScreen = "forgot";
+    render();
+  });
+}
+
+function renderForgotPassword() {
+  renderAuthShell(
+    '<p class="lede">輸入註冊時用的 Email，我們會寄一組驗證碼給你，用來設定新密碼。</p>' +
+      '<form id="forgot-form" class="stack">' +
+      '<div><label class="field-label" for="fp-email">Email</label>' +
+      '<input class="text-input" id="fp-email" type="email" required autocomplete="email" /></div>' +
+      '<div class="field-error" id="fp-err"></div>' +
+      '<button type="submit" class="btn btn-accent btn-block">寄送驗證碼</button>' +
+      "</form>" +
+      '<div class="auth-toggle"><button id="fp-back" type="button">返回登入</button></div>'
+  );
+  document.getElementById("forgot-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var email = document.getElementById("fp-email").value.trim();
+    var errEl = document.getElementById("fp-err");
+    errEl.textContent = "";
+    try {
+      await resetPassword({ username: email });
+      state.pendingResetEmail = email;
+      state.authScreen = "reset";
+      render();
+    } catch (err) {
+      errEl.textContent = friendlyAuthError(err);
+    }
+  });
+  document.getElementById("fp-back").addEventListener("click", function () {
+    state.authScreen = "signin";
+    render();
+  });
+}
+
+function renderResetPassword() {
+  renderAuthShell(
+    '<p class="lede">我們寄了一組 6 位數驗證碼到 <b>' +
+      esc(state.pendingResetEmail) +
+      "</b>，請輸入並設定新密碼。</p>" +
+      '<form id="reset-form" class="stack">' +
+      '<div><label class="field-label" for="rp-code">驗證碼</label>' +
+      '<input class="text-input code-input" id="rp-code" inputmode="numeric" maxlength="6" required /></div>' +
+      '<div><label class="field-label" for="rp-pw">新密碼</label>' +
+      '<div class="pw-wrap"><input class="text-input" id="rp-pw" type="password" required minlength="8" autocomplete="new-password" placeholder="至少 8 碼，需有英文字母與數字" />' +
+      '<button type="button" class="pw-toggle" data-toggle-pw="rp-pw" title="顯示/隱藏密碼">👁</button></div></div>' +
+      '<div class="field-error" id="rp-err"></div>' +
+      '<button type="submit" class="btn btn-accent btn-block">設定新密碼</button>' +
+      "</form>" +
+      '<div class="auth-toggle"><button id="rp-resend" type="button">重新寄送驗證碼</button></div>' +
+      '<div class="auth-toggle"><button id="rp-back" type="button">返回登入</button></div>'
+  );
+  wirePasswordToggles();
+  document.getElementById("reset-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var code = document.getElementById("rp-code").value.trim();
+    var newPw = document.getElementById("rp-pw").value;
+    var errEl = document.getElementById("rp-err");
+    errEl.textContent = "";
+    try {
+      await confirmResetPassword({
+        username: state.pendingResetEmail,
+        confirmationCode: code,
+        newPassword: newPw,
+      });
+      state.pendingResetEmail = "";
+      state.authScreen = "signin";
+      render();
+      showToast("密碼已重新設定，請用新密碼登入");
+    } catch (err) {
+      errEl.textContent = friendlyAuthError(err);
+    }
+  });
+  document.getElementById("rp-resend").addEventListener("click", async function () {
+    try {
+      await resetPassword({ username: state.pendingResetEmail });
+      showToast("已重新寄送驗證碼");
+    } catch (err) {
+      showToast(friendlyAuthError(err));
+    }
+  });
+  document.getElementById("rp-back").addEventListener("click", function () {
+    state.pendingResetEmail = "";
+    state.authScreen = "signin";
     render();
   });
 }
@@ -943,6 +1035,8 @@ function render() {
   if (state.authScreen === "signin") return renderSignIn();
   if (state.authScreen === "signup") return renderSignUp();
   if (state.authScreen === "confirm") return renderConfirm();
+  if (state.authScreen === "forgot") return renderForgotPassword();
+  if (state.authScreen === "reset") return renderResetPassword();
   if (state.authScreen === "setname") return renderSetName();
 
   var app = document.getElementById("app");
