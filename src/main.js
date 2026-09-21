@@ -248,6 +248,11 @@ var state = {
   pushSubs: [],
   showPushTutorial: false,
   pushBusy: false,
+  historyQuery: "",
+  historyStart: "",
+  historyEnd: "",
+  historyType: "",
+  historyLimit: 20,
 };
 function genInviteCode() {
   var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉容易看錯的 0/O/1/I
@@ -330,15 +335,15 @@ function subscribeAll() {
       },
     })
   );
-  unsubs.push(
-    client.models.TeamStat.observeQuery().subscribe({
-      next: function (r) {
-        state.teamStats = r.items;
-        checkBattleNotice();
-        render();
-      },
-    })
-  );
+  // 注意：TeamStat 這裡故意不用 observeQuery（即時訂閱），改用下面的
+  // refreshTeamStats() 主動查詢。原因是好友分享給我的那些資料，是透過
+  // ownersDefinedIn('viewers') 這種「動態多人授權」規則給的讀取權限，
+  // AWS AppSync 的即時訂閱（subscription）對這種動態授權的支援不完整，
+  // 常常會訂閱不到「別人分享給我」的那筆資料更新，導致好友對戰互相看不到彼此。
+  // 改用一般查詢（list）就沒有這個限制，資料一定拿得到，只是不是「即時」推送，
+  // 而是每隔一段時間、或切到好友對戰頁面時主動重新抓一次。
+  refreshTeamStats();
+  startTeamStatsPolling();
   unsubs.push(
     client.models.PushSubscription.observeQuery().subscribe({
       next: function (r) {
@@ -480,12 +485,33 @@ function syncMyTeamStat() {
       newPeople: s.newPeople,
       viewers: viewers,
     };
-    if (mine) {
-      client.models.TeamStat.update(Object.assign({ id: mine.id }, payload)).catch(function () {});
-    } else {
-      client.models.TeamStat.create(payload).catch(function () {});
-    }
+    var req = mine
+      ? client.models.TeamStat.update(Object.assign({ id: mine.id }, payload))
+      : client.models.TeamStat.create(payload);
+    req.then(refreshTeamStats).catch(function () {});
   }, 400);
+}
+async function refreshTeamStats() {
+  try {
+    var res = await client.models.TeamStat.list();
+    state.teamStats = res.data || [];
+    checkBattleNotice();
+    render();
+  } catch (e) {
+    console.error(e);
+  }
+}
+var _histQTimer = null;
+var _teamStatsPollTimer = null;
+function startTeamStatsPolling() {
+  if (_teamStatsPollTimer) return;
+  _teamStatsPollTimer = setInterval(function () {
+    if (state.authScreen === "app") refreshTeamStats();
+  }, 30000);
+}
+function stopTeamStatsPolling() {
+  clearInterval(_teamStatsPollTimer);
+  _teamStatsPollTimer = null;
 }
 function checkBattleNotice() {
   var latest = 0;
@@ -856,6 +882,18 @@ function plansOn(dateKey) {
     return (p.planAt || "").slice(0, 10) === dateKey;
   });
 }
+// 歷史紀錄搜尋/篩選用的小工具：
+// matchesQuery — 姓名或備註是否包含關鍵字（不分大小寫）
+// inDateRange — 日期是否落在篩選區間內（起訖任一沒填就不限制那一邊）
+function matchesQuery(text, q) {
+  if (!q) return true;
+  return (text || "").toLowerCase().indexOf(q.toLowerCase()) > -1;
+}
+function inDateRange(dateKey, start, end) {
+  if (start && dateKey < start) return false;
+  if (end && dateKey > end) return false;
+  return true;
+}
 function weekRangeKeys(dateKey) {
   var d = new Date(dateKey + "T00:00:00");
   var dow = (d.getDay() + 6) % 7;
@@ -1175,9 +1213,38 @@ function entryHtmlPlan(p) {
   );
 }
 
+// 歷史紀錄的搜尋/日期/類型篩選列。showTypeFilter=true 時才顯示聯絡類型的下拉選單
+// （只有「聯絡歷史」分頁需要，因為工作規劃的分類已經用分頁分開了）。
+function renderHistoryFilterBar(showTypeFilter) {
+  var typeOpts = showTypeFilter
+    ? '<option value="">全部類型</option>' +
+      LOG_TYPES.map(function (t) {
+        return '<option value="' + t.v + '"' + (state.historyType === t.v ? " selected" : "") + '>' + esc(t.label) + "</option>";
+      }).join("")
+    : "";
+  var hasFilter = state.historyQuery || state.historyStart || state.historyEnd || (showTypeFilter && state.historyType);
+  return (
+    '<div class="history-filter-row">' +
+    '<input class="text-input" type="text" id="hist-q" placeholder="搜尋姓名或備註…" value="' +
+    esc(state.historyQuery) +
+    '"/>' +
+    '<input class="text-input" type="date" id="hist-start" value="' +
+    esc(state.historyStart) +
+    '"/>' +
+    '<span class="export-sep">至</span>' +
+    '<input class="text-input" type="date" id="hist-end" value="' +
+    esc(state.historyEnd) +
+    '"/>' +
+    (showTypeFilter ? '<select class="text-input" id="hist-type">' + typeOpts + "</select>" : "") +
+    (hasFilter ? '<button type="button" class="btn btn-ghost btn-sm" id="hist-clear">清除篩選</button>' : "") +
+    "</div>"
+  );
+}
+
 function renderTabs() {
   var tabs = [
     { k: "today", label: "當日聯絡" },
+    { k: "logs", label: "聯絡歷史" },
     { k: "plans", label: "工作規劃" },
     { k: "p1", label: "主要對象" },
     { k: "p2", label: "次要對象" },
@@ -1191,6 +1258,10 @@ function renderTabs() {
     .join("");
 
   var listHtml = "";
+  var filterHtml = "";
+  var moreHtml = "";
+  var q = (state.historyQuery || "").trim();
+
   if (state.trackerTab === "today") {
     var todays = logsOn(state.selectedDate)
       .slice()
@@ -1198,21 +1269,54 @@ function renderTabs() {
         return (a.loggedAt || "") < (b.loggedAt || "") ? 1 : -1;
       });
     listHtml = todays.length ? todays.map(entryHtmlLog).join("") : '<div class="empty-hint">' + fmtDateHuman(state.selectedDate) + " 還沒有聯絡記錄。</div>";
-  } else if (state.trackerTab === "plans") {
-    var allPlans = state.plans.slice().sort(function (a, b) {
-      return (a.planAt || "") < (b.planAt || "") ? -1 : 1;
-    });
-    listHtml = allPlans.length ? allPlans.map(entryHtmlPlan).join("") : '<div class="empty-hint">還沒有工作規劃。</div>';
+  } else if (state.trackerTab === "logs") {
+    filterHtml = renderHistoryFilterBar(true);
+    var allLogs = state.logs
+      .filter(function (l) {
+        if (state.historyType && l.type !== state.historyType) return false;
+        if (!inDateRange((l.loggedAt || "").slice(0, 10), state.historyStart, state.historyEnd)) return false;
+        if (q && !matchesQuery(l.contactName, q) && !matchesQuery(l.note, q)) return false;
+        return true;
+      })
+      .sort(function (a, b) {
+        return (a.loggedAt || "") < (b.loggedAt || "") ? 1 : -1;
+      });
+    var shownLogs = allLogs.slice(0, state.historyLimit);
+    listHtml = shownLogs.length ? shownLogs.map(entryHtmlLog).join("") : '<div class="empty-hint">沒有符合條件的聯絡記錄。</div>';
+    if (allLogs.length > shownLogs.length) {
+      moreHtml =
+        '<div class="history-more-row"><button type="button" class="btn btn-ghost btn-sm" id="hist-more">顯示更多（還有 ' +
+        (allLogs.length - shownLogs.length) +
+        " 筆）</button></div>";
+    }
   } else {
-    var pv = state.trackerTab.slice(1);
-    var filtered = state.plans
+    // "plans"（全部工作規劃）跟 p1~p4（單一分類）共用同一套篩選邏輯，
+    // 差別只在於 pv 是 null（不篩分類）還是特定分類代碼。
+    var pv = state.trackerTab === "plans" ? null : state.trackerTab.slice(1);
+    filterHtml = renderHistoryFilterBar(false);
+    var basePlans = pv
+      ? state.plans.filter(function (p) {
+          return p.planType === pv;
+        })
+      : state.plans;
+    var filteredPlans = basePlans
       .filter(function (p) {
-        return p.planType === pv;
+        if (!inDateRange((p.planAt || "").slice(0, 10), state.historyStart, state.historyEnd)) return false;
+        if (q && !matchesQuery(p.contactName, q) && !matchesQuery(p.note, q)) return false;
+        return true;
       })
       .sort(function (a, b) {
         return (a.planAt || "") < (b.planAt || "") ? -1 : 1;
       });
-    listHtml = filtered.length ? filtered.map(entryHtmlPlan).join("") : '<div class="empty-hint">目前沒有這個分類的對象。</div>';
+    var shownPlans = filteredPlans.slice(0, state.historyLimit);
+    var emptyMsg = pv ? "目前沒有這個分類的對象。" : "還沒有工作規劃。";
+    listHtml = shownPlans.length ? shownPlans.map(entryHtmlPlan).join("") : '<div class="empty-hint">' + emptyMsg + "</div>";
+    if (filteredPlans.length > shownPlans.length) {
+      moreHtml =
+        '<div class="history-more-row"><button type="button" class="btn btn-ghost btn-sm" id="hist-more">顯示更多（還有 ' +
+        (filteredPlans.length - shownPlans.length) +
+        " 筆）</button></div>";
+    }
   }
 
   var wk = weekRangeKeys(todayKey());
@@ -1235,9 +1339,13 @@ function renderTabs() {
     exportHtml +
     '<div class="tabs">' +
     tabsHtml +
-    '</div><div class="entry-list">' +
+    "</div>" +
+    filterHtml +
+    '<div class="entry-list">' +
     listHtml +
-    "</div></div>"
+    "</div>" +
+    moreHtml +
+    "</div>"
   );
 }
 
@@ -1535,7 +1643,10 @@ function wireEvents() {
   app.querySelectorAll("#topbar nav button, .bottom-nav button").forEach(function (b) {
     b.addEventListener("click", function () {
       state.view = b.getAttribute("data-view");
-      if (state.view === "battle") markBattleSeen();
+      if (state.view === "battle") {
+        markBattleSeen();
+        refreshTeamStats();
+      }
       render();
     });
   });
@@ -1544,6 +1655,7 @@ function wireEvents() {
   if (so)
     so.addEventListener("click", async function () {
       clearSubs();
+      stopTeamStatsPolling();
       await signOut();
       state.contacts = [];
       state.customGroups = [];
@@ -1557,6 +1669,11 @@ function wireEvents() {
       state.addFriendErr = "";
       state.pushSubs = [];
       state.showPushTutorial = false;
+      state.historyQuery = "";
+      state.historyStart = "";
+      state.historyEnd = "";
+      state.historyType = "";
+      state.historyLimit = 20;
       state.authScreen = "signin";
       render();
     });
@@ -1783,9 +1900,68 @@ function wireEvents() {
     app.querySelectorAll("[data-tab]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.trackerTab = btn.getAttribute("data-tab");
+        state.historyLimit = 20;
         render();
       });
     });
+    var histQ = document.getElementById("hist-q");
+    if (histQ)
+      histQ.addEventListener("input", function () {
+        var val = histQ.value;
+        var pos = histQ.selectionStart;
+        clearTimeout(_histQTimer);
+        _histQTimer = setTimeout(function () {
+          state.historyQuery = val;
+          state.historyLimit = 20;
+          render();
+          // render() 會整個重繪 #app，重繪後把游標焦點還給搜尋框，
+          // 不然使用者打到一半輸入框就會失去焦點、跳出鍵盤。
+          var el = document.getElementById("hist-q");
+          if (el) {
+            el.focus();
+            try {
+              el.setSelectionRange(pos, pos);
+            } catch (e) {}
+          }
+        }, 300);
+      });
+    var histStart = document.getElementById("hist-start");
+    if (histStart)
+      histStart.addEventListener("change", function () {
+        state.historyStart = histStart.value;
+        state.historyLimit = 20;
+        render();
+      });
+    var histEnd = document.getElementById("hist-end");
+    if (histEnd)
+      histEnd.addEventListener("change", function () {
+        state.historyEnd = histEnd.value;
+        state.historyLimit = 20;
+        render();
+      });
+    var histType = document.getElementById("hist-type");
+    if (histType)
+      histType.addEventListener("change", function () {
+        state.historyType = histType.value;
+        state.historyLimit = 20;
+        render();
+      });
+    var histClear = document.getElementById("hist-clear");
+    if (histClear)
+      histClear.addEventListener("click", function () {
+        state.historyQuery = "";
+        state.historyStart = "";
+        state.historyEnd = "";
+        state.historyType = "";
+        state.historyLimit = 20;
+        render();
+      });
+    var histMore = document.getElementById("hist-more");
+    if (histMore)
+      histMore.addEventListener("click", function () {
+        state.historyLimit += 20;
+        render();
+      });
     var exportToggle = document.getElementById("export-toggle");
     if (exportToggle)
       exportToggle.addEventListener("click", function () {

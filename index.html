@@ -290,6 +290,12 @@
   }
   .tabs button.active{color:var(--ink); border-color:var(--accent);}
 
+  .history-filter-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px;}
+  .history-filter-row input[type=text]{flex:1 1 160px; min-width:120px;}
+  .history-filter-row input[type=date]{padding:8px 10px; font-size:13.5px; width:auto;}
+  .history-filter-row select{padding:8px 10px; font-size:13.5px; width:auto;}
+  .history-more-row{display:flex; justify-content:center; margin-top:10px;}
+
   .entry-list{display:flex; flex-direction:column; gap:8px; max-height:340px; overflow-y:auto;}
   .entry{
     display:flex; align-items:flex-start; gap:10px; padding:10px 11px; border-radius:10px; background:var(--surface-2);
@@ -428,6 +434,7 @@
     .btn{min-height:44px;}
     .btn-sm{min-height:38px;}
     .tabs button{padding:10px 14px; font-size:14px; min-height:40px;}
+    .history-filter-row input, .history-filter-row select{min-height:40px;}
     #topbar .whoami span:not(.badge-mode){display:none;}
   }
   @media (hover:none){
