@@ -25,6 +25,18 @@ type SubRow = {
 };
 
 export const handler: DynamoDBStreamHandler = async (event) => {
+  // 除錯用：只印「有沒有值」，不印金鑰本身內容，避免外洩。
+  console.log(
+    '[push-notify] 啟動，VAPID_PUBLIC_KEY存在=' +
+      !!VAPID_PUBLIC_KEY +
+      ' VAPID_PRIVATE_KEY存在=' +
+      !!VAPID_PRIVATE_KEY +
+      ' PUSH_SUBSCRIPTION_TABLE_NAME=' +
+      (process.env.PUSH_SUBSCRIPTION_TABLE_NAME || '(未設定)') +
+      ' 收到記錄數=' +
+      event.Records.length
+  );
+
   if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
     console.error('缺少 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY，還沒設定 Secret 之前無法發送推播。');
     return;
@@ -32,16 +44,24 @@ export const handler: DynamoDBStreamHandler = async (event) => {
   var teamStatItems: { viewers: string[]; displayName: string }[] = [];
 
   for (const record of event.Records) {
+    console.log('[push-notify] 收到一筆事件，type=' + record.eventName);
     if (record.eventName !== 'INSERT' && record.eventName !== 'MODIFY') continue;
     const img = record.dynamodb && record.dynamodb.NewImage;
-    if (!img) continue;
+    if (!img) {
+      console.log('[push-notify] 這筆事件沒有 NewImage，略過');
+      continue;
+    }
     const item = unmarshall(img as any) as any;
     const viewers: string[] = Array.isArray(item.viewers) ? item.viewers : [];
+    console.log('[push-notify] displayName=' + item.displayName + ' viewers數量=' + viewers.length + ' viewers=' + JSON.stringify(viewers));
     if (!viewers.length) continue;
     teamStatItems.push({ viewers: viewers, displayName: item.displayName || '隊友' });
   }
 
-  if (!teamStatItems.length) return;
+  if (!teamStatItems.length) {
+    console.log('[push-notify] 沒有任何一筆資料有 viewers（可能還沒加好友，或這次更新的人沒有好友看得到），結束。');
+    return;
+  }
 
   const tableName = process.env.PUSH_SUBSCRIPTION_TABLE_NAME;
   if (!tableName) {
@@ -52,6 +72,7 @@ export const handler: DynamoDBStreamHandler = async (event) => {
   // 訂閱數量在這個工具的使用規模下很小，用 Scan 一次拿全部即可，不用另外建索引。
   const scan = await ddb.send(new ScanCommand({ TableName: tableName }));
   const subs: SubRow[] = (scan.Items || []).map((it) => unmarshall(it) as SubRow);
+  console.log('[push-notify] PushSubscription 表裡總共有 ' + subs.length + ' 筆訂閱資料，owner清單=' + JSON.stringify(subs.map((s) => s.owner)));
 
   const sendTasks: Promise<any>[] = [];
   for (const stat of teamStatItems) {
@@ -60,20 +81,31 @@ export const handler: DynamoDBStreamHandler = async (event) => {
       body: stat.displayName + ' 更新了本週的 10-3-1 進度，打開鯊魚日常看看誰領先！',
     });
     for (const sub of subs) {
-      if (!sub.owner || !sub.endpoint || !sub.p256dh || !sub.authKey) continue;
-      if (stat.viewers.indexOf(sub.owner) === -1) continue;
+      if (!sub.owner || !sub.endpoint || !sub.p256dh || !sub.authKey) {
+        console.log('[push-notify] 這筆訂閱資料欄位不完整，略過。owner=' + sub.owner);
+        continue;
+      }
+      if (stat.viewers.indexOf(sub.owner) === -1) {
+        console.log('[push-notify] ' + sub.owner + ' 不在這筆資料的 viewers 名單裡，不發給他。');
+        continue;
+      }
+      console.log('[push-notify] 準備發送推播給 owner=' + sub.owner);
       sendTasks.push(
         webpush
           .sendNotification(
             { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.authKey } } as any,
             payload
           )
+          .then(function () {
+            console.log('[push-notify] 發送成功，owner=' + sub.owner);
+          })
           .catch((err) => {
-            console.error('推播失敗（可能是訂閱已失效）', err && err.message);
+            console.error('[push-notify] 推播失敗（可能是訂閱已失效），owner=' + sub.owner + ' 錯誤=', err && (err.statusCode || err.message || err));
           })
       );
     }
   }
 
   await Promise.all(sendTasks);
+  console.log('[push-notify] 全部處理完成。');
 };
