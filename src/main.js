@@ -253,6 +253,7 @@ var state = {
   historyEnd: "",
   historyType: "",
   historyLimit: 20,
+  historyFilterOpen: false,
 };
 function genInviteCode() {
   var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉容易看錯的 0/O/1/I
@@ -1170,8 +1171,9 @@ function entryHtmlLog(l) {
     esc(l.contactName) +
     "</div>" +
     (l.note ? '<div class="e-note">' + esc(l.note) + "</div>" : "") +
+    // 日期已經由上面的分組標題顯示了，這裡只顯示時間，避免重複。
     '<div class="e-time">' +
-    esc((l.loggedAt || "").replace("T", " ").slice(0, 16)) +
+    esc((l.loggedAt || "").slice(11, 16)) +
     "</div></div>" +
     '<button class="x-del' +
     (isArmed("log", l.id) ? " confirm" : "") +
@@ -1195,9 +1197,8 @@ function entryHtmlPlan(p) {
     esc(p.contactName) +
     "</div>" +
     (p.note ? '<div class="e-note">' + esc(p.note) + "</div>" : "") +
-    '<div class="e-time">' +
-    esc((p.planAt || "").slice(0, 10)) +
-    "</div></div>" +
+    // 日期已經由上面的分組標題顯示了，這裡不用再重複一次。
+    "</div>" +
     '<button class="ics-btn" data-ics-plan="' +
     p.id +
     '" title="加入手機日曆">📅</button>' +
@@ -1215,30 +1216,100 @@ function entryHtmlPlan(p) {
 
 // 歷史紀錄的搜尋/日期/類型篩選列。showTypeFilter=true 時才顯示聯絡類型的下拉選單
 // （只有「聯絡歷史」分頁需要，因為工作規劃的分類已經用分頁分開了）。
+// 篩選列預設收合，只有在使用者展開、或已經有套用篩選條件時才會顯示完整的欄位，
+// 收合時改顯示一行文字摘要，畫面比較精簡。
 function renderHistoryFilterBar(showTypeFilter) {
+  var hasFilter = !!(state.historyQuery || state.historyStart || state.historyEnd || (showTypeFilter && state.historyType));
+  var open = state.historyFilterOpen || hasFilter;
+
+  var summaryParts = [];
+  if (state.historyQuery) summaryParts.push("關鍵字「" + esc(state.historyQuery) + "」");
+  if (state.historyStart || state.historyEnd) {
+    summaryParts.push("日期 " + esc(state.historyStart || "…") + " ~ " + esc(state.historyEnd || "…"));
+  }
+  if (showTypeFilter && state.historyType) {
+    var mt = byV(LOG_TYPES, state.historyType);
+    summaryParts.push("類型：" + esc(mt ? mt.label : state.historyType));
+  }
+
+  var toggleLabel = open ? "收合篩選 ▲" : hasFilter ? "🔍 篩選中（" + summaryParts.length + "）▼" : "🔍 搜尋/篩選 ▼";
+  var headHtml =
+    '<div class="history-filter-head">' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="hist-filter-toggle">' +
+    toggleLabel +
+    "</button>" +
+    (hasFilter ? '<button type="button" class="btn btn-ghost btn-sm" id="hist-clear">清除篩選</button>' : "") +
+    "</div>";
+
+  var summaryHtml = !open && hasFilter ? '<div class="history-filter-summary">' + summaryParts.join("・") + "</div>" : "";
+
   var typeOpts = showTypeFilter
     ? '<option value="">全部類型</option>' +
       LOG_TYPES.map(function (t) {
         return '<option value="' + t.v + '"' + (state.historyType === t.v ? " selected" : "") + '>' + esc(t.label) + "</option>";
       }).join("")
     : "";
-  var hasFilter = state.historyQuery || state.historyStart || state.historyEnd || (showTypeFilter && state.historyType);
-  return (
-    '<div class="history-filter-row">' +
-    '<input class="text-input" type="text" id="hist-q" placeholder="搜尋姓名或備註…" value="' +
-    esc(state.historyQuery) +
-    '"/>' +
-    '<input class="text-input" type="date" id="hist-start" value="' +
-    esc(state.historyStart) +
-    '"/>' +
-    '<span class="export-sep">至</span>' +
-    '<input class="text-input" type="date" id="hist-end" value="' +
-    esc(state.historyEnd) +
-    '"/>' +
-    (showTypeFilter ? '<select class="text-input" id="hist-type">' + typeOpts + "</select>" : "") +
-    (hasFilter ? '<button type="button" class="btn btn-ghost btn-sm" id="hist-clear">清除篩選</button>' : "") +
-    "</div>"
-  );
+  var fieldsHtml = open
+    ? '<div class="history-filter-row">' +
+      '<input class="text-input" type="text" id="hist-q" placeholder="搜尋姓名或備註…" value="' +
+      esc(state.historyQuery) +
+      '"/>' +
+      '<input class="text-input" type="date" id="hist-start" value="' +
+      esc(state.historyStart) +
+      '"/>' +
+      '<span class="export-sep">至</span>' +
+      '<input class="text-input" type="date" id="hist-end" value="' +
+      esc(state.historyEnd) +
+      '"/>' +
+      (showTypeFilter ? '<select class="text-input" id="hist-type">' + typeOpts + "</select>" : "") +
+      "</div>"
+    : "";
+
+  return '<div class="history-filter-bar">' + headHtml + summaryHtml + fieldsHtml + "</div>";
+}
+
+// 把已經排序好的紀錄，依照日期分組、加上日期標題（今天/昨天/幾月幾日 週幾），
+// 讓歷史紀錄不是一整條扁平列表，比較好瀏覽。傳入的 items 必須已經照日期排序，
+// 同一天的資料才會連續出現，分組才會正確。
+function fmtGroupDateLabel(dateKey) {
+  var today = todayKey();
+  var y = new Date(today + "T00:00:00");
+  y.setDate(y.getDate() - 1);
+  var yesterdayKey = y.getFullYear() + "-" + pad(y.getMonth() + 1) + "-" + pad(y.getDate());
+  var weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+  var d = new Date(dateKey + "T00:00:00");
+  var wd = "週" + weekdays[d.getDay()];
+  if (dateKey === today) return "今天・" + fmtDateHuman(dateKey) + "（" + wd + "）";
+  if (dateKey === yesterdayKey) return "昨天・" + fmtDateHuman(dateKey) + "（" + wd + "）";
+  return fmtDateHuman(dateKey) + "（" + wd + "）";
+}
+function renderGroupedEntries(items, dateField, entryFn) {
+  var groups = [];
+  var currentKey = null;
+  var currentArr = null;
+  items.forEach(function (it) {
+    var dk = (it[dateField] || "").slice(0, 10);
+    if (dk !== currentKey) {
+      currentKey = dk;
+      currentArr = [];
+      groups.push({ key: dk, items: currentArr });
+    }
+    currentArr.push(it);
+  });
+  return groups
+    .map(function (g) {
+      return (
+        '<div class="history-date-header"><span>' +
+        esc(fmtGroupDateLabel(g.key)) +
+        '</span><span class="history-date-count">' +
+        g.items.length +
+        " 筆</span></div>" +
+        '<div class="history-date-group">' +
+        g.items.map(entryFn).join("") +
+        "</div>"
+      );
+    })
+    .join("");
 }
 
 function renderTabs() {
@@ -1282,7 +1353,7 @@ function renderTabs() {
         return (a.loggedAt || "") < (b.loggedAt || "") ? 1 : -1;
       });
     var shownLogs = allLogs.slice(0, state.historyLimit);
-    listHtml = shownLogs.length ? shownLogs.map(entryHtmlLog).join("") : '<div class="empty-hint">沒有符合條件的聯絡記錄。</div>';
+    listHtml = shownLogs.length ? renderGroupedEntries(shownLogs, "loggedAt", entryHtmlLog) : '<div class="empty-hint">沒有符合條件的聯絡記錄。</div>';
     if (allLogs.length > shownLogs.length) {
       moreHtml =
         '<div class="history-more-row"><button type="button" class="btn btn-ghost btn-sm" id="hist-more">顯示更多（還有 ' +
@@ -1310,7 +1381,7 @@ function renderTabs() {
       });
     var shownPlans = filteredPlans.slice(0, state.historyLimit);
     var emptyMsg = pv ? "目前沒有這個分類的對象。" : "還沒有工作規劃。";
-    listHtml = shownPlans.length ? shownPlans.map(entryHtmlPlan).join("") : '<div class="empty-hint">' + emptyMsg + "</div>";
+    listHtml = shownPlans.length ? renderGroupedEntries(shownPlans, "planAt", entryHtmlPlan) : '<div class="empty-hint">' + emptyMsg + "</div>";
     if (filteredPlans.length > shownPlans.length) {
       moreHtml =
         '<div class="history-more-row"><button type="button" class="btn btn-ghost btn-sm" id="hist-more">顯示更多（還有 ' +
@@ -1674,6 +1745,7 @@ function wireEvents() {
       state.historyEnd = "";
       state.historyType = "";
       state.historyLimit = 20;
+      state.historyFilterOpen = false;
       state.authScreen = "signin";
       render();
     });
@@ -1904,6 +1976,12 @@ function wireEvents() {
         render();
       });
     });
+    var histFilterToggle = document.getElementById("hist-filter-toggle");
+    if (histFilterToggle)
+      histFilterToggle.addEventListener("click", function () {
+        state.historyFilterOpen = !state.historyFilterOpen;
+        render();
+      });
     var histQ = document.getElementById("hist-q");
     if (histQ)
       histQ.addEventListener("input", function () {
