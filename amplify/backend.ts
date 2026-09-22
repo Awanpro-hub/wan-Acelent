@@ -32,6 +32,7 @@ cfnUserPool.policies = {
  */
 const teamStatTable = backend.data.resources.tables['TeamStat'];
 const pushSubTable = backend.data.resources.tables['PushSubscription'];
+const pokeTable = backend.data.resources.tables['Poke'];
 // backend.pushNotify.resources.lambda 的 TypeScript 型別是比較籠統的 IFunction，
 // 沒有宣告 addEnvironment 這個方法（雖然實際上底層物件就是一般的 Lambda Function，
 // 一定支援這個方法）。用型別轉換告訴 TypeScript「這其實是一個 Function」即可。
@@ -52,7 +53,7 @@ const streamPolicy = new Policy(functionStack, 'PushNotifyStreamPolicy', {
     new PolicyStatement({
       effect: Effect.ALLOW,
       actions: ['dynamodb:DescribeStream', 'dynamodb:GetRecords', 'dynamodb:GetShardIterator', 'dynamodb:ListStreams'],
-      resources: [teamStatTable.tableStreamArn as string],
+      resources: [teamStatTable.tableStreamArn as string, pokeTable.tableStreamArn as string],
     }),
   ],
 });
@@ -75,3 +76,12 @@ const streamMapping = new EventSourceMapping(functionStack, 'PushNotifyTeamStatS
   startingPosition: StartingPosition.LATEST,
 });
 streamMapping.node.addDependency(streamPolicy);
+
+// 「戳戳」功能：Poke 表一有新增，就用同一個 pushNotify function 發推播，
+// 跟 TeamStat 共用同一支 Lambda，程式碼裡會依照資料的欄位自己判斷這是哪一種通知。
+const pokeStreamMapping = new EventSourceMapping(functionStack, 'PushNotifyPokeStreamMapping', {
+  target: pushNotifyLambda,
+  eventSourceArn: pokeTable.tableStreamArn,
+  startingPosition: StartingPosition.LATEST,
+});
+pokeStreamMapping.node.addDependency(streamPolicy);

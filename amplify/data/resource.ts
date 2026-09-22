@@ -54,6 +54,19 @@ const schema = a.schema({
     })
     .authorization((allow) => [allow.owner(), allow.ownersDefinedIn('viewers').to(['read'])]),
 
+  // 好友對戰：戳一下好友，提醒他「我注意到你了，今天也要加油」。
+  // 原理跟 TeamStat 一樣：viewers 放對方的帳號識別碼，這樣對方才能讀到這筆
+  // 「有人戳我」的紀錄；後端 push-notify function 也是監聽這張表的異動來發推播。
+  Poke: a
+    .model({
+      toOwnerId: a.string().required(), // 被戳的人的帳號識別碼
+      toDisplayName: a.string(),
+      fromDisplayName: a.string(),
+      message: a.string().required(),
+      viewers: a.string().array(), // 固定只放 [toOwnerId]，跟 TeamStat 用同一套授權機制
+    })
+    .authorization((allow) => [allow.owner(), allow.ownersDefinedIn('viewers').to(['read'])]),
+
   // 分類名單裡的一筆聯絡人
   Contact: a
     .model({

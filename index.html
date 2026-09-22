@@ -355,6 +355,26 @@
   .battle-card-head{display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; font-size:15px;}
   .battle-pending-tag{font-size:11px; font-weight:700; color:var(--ink-faint); border:1px solid var(--border); border-radius:100px; padding:3px 8px; white-space:nowrap;}
   .battle-pending-note{font-size:12.5px; color:var(--ink-faint); line-height:1.6;}
+  .poke-btn{font-size:12px; padding:5px 10px; white-space:nowrap; flex:none;}
+  .poke-btn:disabled{opacity:.55; cursor:default;}
+
+  .pokes-panel{margin-bottom:20px;}
+  .pokes-panel .q-label{margin-bottom:10px;}
+  .poke-row{display:flex; align-items:flex-start; gap:10px; padding:8px 0;}
+  .poke-row + .poke-row{border-top:1px solid var(--border);}
+  .poke-icon{font-size:16px; flex:none; margin-top:1px;}
+  .poke-body{flex:1; min-width:0;}
+  .poke-text{font-size:13.5px; color:var(--ink); line-height:1.5; word-break:break-word;}
+  .poke-time{font-size:11.5px; color:var(--ink-faint); margin-top:2px;}
+
+  .poke-msg-list{display:flex; flex-direction:column; gap:8px; margin-top:14px;}
+  .poke-msg-btn{
+    text-align:left; background:var(--surface-2); border:1px solid var(--border); border-radius:12px;
+    padding:10px 12px; font-size:13.5px; color:var(--ink); cursor:pointer; transition:border-color .15s ease, background .15s ease;
+  }
+  .poke-msg-btn:hover{border-color:var(--accent); background:var(--accent-soft);}
+  .poke-msg-btn:disabled{opacity:.55; cursor:default;}
+
   .battle-metric + .battle-metric{margin-top:10px;}
   .bm-label{font-size:12px; color:var(--ink-faint); font-weight:700; margin-bottom:4px;}
   .bm-bar-row{display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--ink-faint);}

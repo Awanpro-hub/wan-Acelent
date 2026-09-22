@@ -41,7 +41,10 @@ export const handler: DynamoDBStreamHandler = async (event) => {
     console.error('缺少 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY，還沒設定 Secret 之前無法發送推播。');
     return;
   }
-  var teamStatItems: { viewers: string[]; displayName: string }[] = [];
+  // 這個 function 現在同時監聽兩張表的異動：TeamStat（好友對戰進度更新）
+  // 跟 Poke（戳戳）。用 item 上有沒有 toOwnerId/message 這些欄位，來判斷
+  // 這筆是哪一種資料，分別組出不同的通知文字。
+  var notifications: { viewers: string[]; title: string; body: string }[] = [];
 
   for (const record of event.Records) {
     console.log('[push-notify] 收到一筆事件，type=' + record.eventName);
@@ -53,12 +56,34 @@ export const handler: DynamoDBStreamHandler = async (event) => {
     }
     const item = unmarshall(img as any) as any;
     const viewers: string[] = Array.isArray(item.viewers) ? item.viewers : [];
-    console.log('[push-notify] displayName=' + item.displayName + ' viewers數量=' + viewers.length + ' viewers=' + JSON.stringify(viewers));
+    var isPoke = typeof item.toOwnerId === 'string' && typeof item.message === 'string';
+    console.log(
+      '[push-notify] ' +
+        (isPoke ? '戳戳' : '好友對戰進度') +
+        ' displayName=' +
+        item.displayName +
+        ' viewers數量=' +
+        viewers.length +
+        ' viewers=' +
+        JSON.stringify(viewers)
+    );
     if (!viewers.length) continue;
-    teamStatItems.push({ viewers: viewers, displayName: item.displayName || '隊友' });
+    if (isPoke) {
+      notifications.push({
+        viewers: viewers,
+        title: '有人戳你一下 👉',
+        body: (item.fromDisplayName || '隊友') + '：' + item.message,
+      });
+    } else {
+      notifications.push({
+        viewers: viewers,
+        title: '好友對戰更新 🦈',
+        body: (item.displayName || '隊友') + ' 更新了本週的 10-3-1 進度，打開鯊魚日常看看誰領先！',
+      });
+    }
   }
 
-  if (!teamStatItems.length) {
+  if (!notifications.length) {
     console.log('[push-notify] 沒有任何一筆資料有 viewers（可能還沒加好友，或這次更新的人沒有好友看得到），結束。');
     return;
   }
@@ -84,12 +109,9 @@ export const handler: DynamoDBStreamHandler = async (event) => {
   }
 
   const sendTasks: Promise<any>[] = [];
-  for (const stat of teamStatItems) {
-    const payload = JSON.stringify({
-      title: '好友對戰更新 🦈',
-      body: stat.displayName + ' 更新了本週的 10-3-1 進度，打開鯊魚日常看看誰領先！',
-    });
-    const viewerSubs = stat.viewers.map(subOf);
+  for (const note of notifications) {
+    const payload = JSON.stringify({ title: note.title, body: note.body });
+    const viewerSubs = note.viewers.map(subOf);
     for (const sub of subs) {
       if (!sub.owner || !sub.endpoint || !sub.p256dh || !sub.authKey) {
         console.log('[push-notify] 這筆訂閱資料欄位不完整，略過。owner=' + sub.owner);

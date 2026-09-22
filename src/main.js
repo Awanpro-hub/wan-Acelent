@@ -57,6 +57,12 @@ function byV(list, v) {
   }
   return null;
 }
+// Amplify 的帳號識別碼實際存起來有兩種長相：完整版「sub::username」，或只有
+// 「sub」這一段。比對「這是不是同一個人」的時候，統一只取 "::" 前面那一段，
+// 兩種格式都認得出來（跟 push-notify function 裡用的邏輯一樣）。
+function subOf(id) {
+  return (id || "").split("::")[0];
+}
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -254,7 +260,16 @@ var state = {
   historyType: "",
   historyLimit: 20,
   historyFilterOpen: false,
+  pokes: [], // 我發出過的 + 收到的戳戳（list() 拿回來的原始資料，畫面上再分開處理）
+  pokeTarget: null, // { ownerId, displayName } 目前正在挑訊息、準備戳誰
+  pokeBusy: false,
 };
+var POKE_MESSAGES = [
+  "我注意到你了，今天也要加油喔！💪",
+  "還沒動作嗎？衝一波 10-3-1 吧！🦈",
+  "來，戳醒你，今天別放水～",
+  "加油！我等你追上我 😆",
+];
 function genInviteCode() {
   var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉容易看錯的 0/O/1/I
   var out = "";
@@ -344,6 +359,7 @@ function subscribeAll() {
   // 改用一般查詢（list）就沒有這個限制，資料一定拿得到，只是不是「即時」推送，
   // 而是每隔一段時間、或切到好友對戰頁面時主動重新抓一次。
   refreshTeamStats();
+  refreshPokes();
   startTeamStatsPolling();
   unsubs.push(
     client.models.PushSubscription.observeQuery().subscribe({
@@ -460,8 +476,11 @@ function syncMyTeamStat() {
         return f.friendOwnerId;
       })
       .filter(Boolean);
+    // 用 subOf() 比對而不是完全相等：t.owner 有時候是完整格式（sub::username），
+    // state.myIdentity 是簡短格式（sub），完全相等常常比不出來，會導致每次都
+    // 誤判成「還沒有自己的紀錄」而一直重複新增，而不是更新同一筆。
     var mine = state.teamStats.filter(function (t) {
-      return t.owner === state.myIdentity && t.weekKey === weekKey;
+      return subOf(t.owner) === subOf(state.myIdentity) && t.weekKey === weekKey;
     })[0];
     var sameViewers =
       mine &&
@@ -507,7 +526,10 @@ var _teamStatsPollTimer = null;
 function startTeamStatsPolling() {
   if (_teamStatsPollTimer) return;
   _teamStatsPollTimer = setInterval(function () {
-    if (state.authScreen === "app") refreshTeamStats();
+    if (state.authScreen === "app") {
+      refreshTeamStats();
+      refreshPokes();
+    }
   }, 30000);
 }
 function stopTeamStatsPolling() {
@@ -517,8 +539,12 @@ function stopTeamStatsPolling() {
 function checkBattleNotice() {
   var latest = 0;
   state.teamStats.forEach(function (t) {
-    if (t.owner === state.myIdentity) return;
+    if (subOf(t.owner) === subOf(state.myIdentity)) return;
     var ts = Date.parse(t.updatedAt || "") || 0;
+    if (ts > latest) latest = ts;
+  });
+  receivedPokes().forEach(function (p) {
+    var ts = Date.parse(p.createdAt || "") || 0;
     if (ts > latest) latest = ts;
   });
   var lastSeen = 0;
@@ -532,6 +558,56 @@ function markBattleSeen() {
   try {
     localStorage.setItem("battleLastSeen", String(Date.now()));
   } catch (e) {}
+}
+
+/* ===================== 戳戳 ===================== */
+// state.pokes 裡混著「我發出去的」跟「我收到的」，用 owner 是不是我自己來分開。
+function receivedPokes() {
+  return state.pokes.filter(function (p) {
+    return subOf(p.owner) !== subOf(state.myIdentity);
+  });
+}
+function sentPokesToday() {
+  var tk = todayKey();
+  return state.pokes.filter(function (p) {
+    return subOf(p.owner) === subOf(state.myIdentity) && (p.createdAt || "").slice(0, 10) === tk;
+  });
+}
+function pokedFriendIdsToday() {
+  return sentPokesToday().map(function (p) {
+    return subOf(p.toOwnerId);
+  });
+}
+async function refreshPokes() {
+  try {
+    var res = await client.models.Poke.list();
+    state.pokes = res.data || [];
+    checkBattleNotice();
+    render();
+  } catch (e) {
+    console.error(e);
+  }
+}
+async function sendPoke(toOwnerId, toDisplayName, message) {
+  if (!state.profile) return;
+  state.pokeBusy = true;
+  render();
+  try {
+    await client.models.Poke.create({
+      toOwnerId: toOwnerId,
+      toDisplayName: toDisplayName,
+      fromDisplayName: state.profile.displayName,
+      message: message,
+      viewers: [toOwnerId],
+    });
+    state.pokeTarget = null;
+    showToast("已戳 " + (toDisplayName || "對方") + " 一下！");
+    await refreshPokes();
+  } catch (err) {
+    showToast(friendlyAuthError(err));
+  }
+  state.pokeBusy = false;
+  render();
 }
 async function ensureInviteCode() {
   if (!state.profile || state.profile.inviteCode) return;
@@ -1554,11 +1630,80 @@ function renderMyProgressSticky(myStat) {
     "</div></div>"
   );
 }
+// 相對時間顯示，用在「收到的戳戳」列表：剛剛／幾分鐘前／幾小時前／幾天前。
+function fmtRelativeTime(iso) {
+  var ts = Date.parse(iso || "");
+  if (!ts) return "";
+  var diffMs = Date.now() - ts;
+  var min = Math.floor(diffMs / 60000);
+  if (min < 1) return "剛剛";
+  if (min < 60) return min + " 分鐘前";
+  var hr = Math.floor(min / 60);
+  if (hr < 24) return hr + " 小時前";
+  var day = Math.floor(hr / 24);
+  if (day < 7) return day + " 天前";
+  return fmtDateHuman((iso || "").slice(0, 10));
+}
+function renderPokesSection() {
+  var list = receivedPokes()
+    .slice()
+    .sort(function (a, b) {
+      return (a.createdAt || "") < (b.createdAt || "") ? 1 : -1;
+    })
+    .slice(0, 5);
+  if (!list.length) return "";
+  var rowsHtml = list
+    .map(function (p) {
+      return (
+        '<div class="poke-row"><span class="poke-icon">👉</span><div class="poke-body">' +
+        '<div class="poke-text"><b>' +
+        esc(p.fromDisplayName || "隊友") +
+        "</b> 戳了你一下：" +
+        esc(p.message) +
+        "</div>" +
+        '<div class="poke-time">' +
+        fmtRelativeTime(p.createdAt) +
+        "</div></div></div>"
+      );
+    })
+    .join("");
+  return '<div class="panel pokes-panel"><div class="q-label">收到的戳戳</div>' + rowsHtml + "</div>";
+}
+function renderPokePicker() {
+  if (!state.pokeTarget) return "";
+  var target = state.pokeTarget;
+  var msgButtons = POKE_MESSAGES.map(function (m, i) {
+    return (
+      '<button type="button" class="poke-msg-btn" data-poke-msg="' +
+      i +
+      '"' +
+      (state.pokeBusy ? " disabled" : "") +
+      ">" +
+      esc(m) +
+      "</button>"
+    );
+  }).join("");
+  return (
+    '<div class="modal-backdrop" id="poke-picker-backdrop">' +
+    '<div class="modal-card">' +
+    "<h3>戳一下「" +
+    esc(target.displayName || "隊友") +
+    "」</h3>" +
+    '<p>選一句想跟他說的話，會馬上通知他。</p>' +
+    '<div class="poke-msg-list">' +
+    msgButtons +
+    "</div>" +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-ghost btn-sm" id="poke-picker-close" type="button">取消</button>' +
+    "</div></div></div>"
+  );
+}
 function renderBattleView() {
   var wk = weekRangeKeys(todayKey());
   var weekKey = wk[0];
   var myStat = weekStatsFor(wk);
   var code = (state.profile && state.profile.inviteCode) || "產生中…";
+  var pokedToday = pokedFriendIdsToday();
 
   var cardsHtml =
     state.friends.length === 0
@@ -1566,7 +1711,7 @@ function renderBattleView() {
       : state.friends
           .map(function (f) {
             var theirStat = state.teamStats.filter(function (t) {
-              return t.owner === f.friendOwnerId && t.weekKey === weekKey;
+              return subOf(t.owner) === subOf(f.friendOwnerId) && t.weekKey === weekKey;
             })[0];
             if (!theirStat) {
               return (
@@ -1576,10 +1721,21 @@ function renderBattleView() {
                 '<p class="battle-pending-note">你已經加了他，但要等他也把你加為好友，才能互看進度。</p></div>'
               );
             }
+            var alreadyPoked = pokedToday.indexOf(subOf(f.friendOwnerId)) > -1;
             return (
               '<div class="battle-card"><div class="battle-card-head"><b>' +
               esc(f.friendDisplayName || theirStat.displayName || "隊友") +
-              "</b></div>" +
+              "</b>" +
+              '<button type="button" class="btn btn-ghost btn-sm poke-btn" data-poke-friend="' +
+              esc(f.friendOwnerId) +
+              '" data-poke-name="' +
+              esc(f.friendDisplayName || theirStat.displayName || "隊友") +
+              '"' +
+              (alreadyPoked ? " disabled" : "") +
+              ">" +
+              (alreadyPoked ? "今天已戳過 ✓" : "👉 戳戳") +
+              "</button>" +
+              "</div>" +
               battleMetricRowTheirs("有效聯絡", myStat.effectiveContacts, theirStat.effectiveContacts || 0) +
               battleMetricRowTheirs("約會", myStat.appointments, theirStat.appointments || 0) +
               battleMetricRowTheirs("新朋友", myStat.newPeople, theirStat.newPeople || 0) +
@@ -1591,6 +1747,7 @@ function renderBattleView() {
   return (
     '<div class="page-head"><div><h2>好友對戰</h2><p>跟隊友互相輸入邀請碼，本週的 10-3-1 進度就能互相看到、互相激勵。</p></div></div>' +
     renderMyProgressSticky(myStat) +
+    renderPokesSection() +
     '<div class="panel invite-panel">' +
     '<div class="invite-code-row"><div><div class="q-label">我的邀請碼</div><div class="invite-code">' +
     esc(code) +
@@ -1608,12 +1765,13 @@ function renderBattleView() {
       : '<span class="push-status">🔕 這台裝置還沒開啟推播通知</span>' +
         '<button class="btn btn-accent btn-sm" id="push-info-btn" type="button">開啟推播通知</button>') +
     "</div>" +
-    '<p class="battle-tip">💡 沒開啟推播的話，隊友更新進度時，上面選單的「好友對戰」還是會出現紅點提醒（打開 App 就看得到）。</p>' +
+    '<p class="battle-tip">💡 沒開啟推播的話，隊友更新進度或戳你的時候，上面選單的「好友對戰」還是會出現紅點提醒（打開 App 就看得到）。</p>' +
     "</div>" +
     '<div class="battle-list">' +
     cardsHtml +
     "</div>" +
-    renderPushTutorial()
+    renderPushTutorial() +
+    renderPokePicker()
   );
 }
 function renderPushTutorial() {
@@ -1717,6 +1875,7 @@ function wireEvents() {
       if (state.view === "battle") {
         markBattleSeen();
         refreshTeamStats();
+        refreshPokes();
       }
       render();
     });
@@ -1735,6 +1894,8 @@ function wireEvents() {
       state.profile = null;
       state.friends = [];
       state.teamStats = [];
+      state.pokes = [];
+      state.pokeTarget = null;
       state.myIdentity = "";
       state.battleNotice = false;
       state.addFriendErr = "";
@@ -1879,6 +2040,38 @@ function wireEvents() {
         state.showPushTutorial = false;
         render();
         enablePush();
+      });
+
+    app.querySelectorAll("[data-poke-friend]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.pokeTarget = {
+          ownerId: btn.getAttribute("data-poke-friend"),
+          displayName: btn.getAttribute("data-poke-name"),
+        };
+        render();
+      });
+    });
+    app.querySelectorAll("[data-poke-msg]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (state.pokeBusy || !state.pokeTarget) return;
+        var idx = parseInt(btn.getAttribute("data-poke-msg"), 10);
+        var msg = POKE_MESSAGES[idx] || POKE_MESSAGES[0];
+        sendPoke(state.pokeTarget.ownerId, state.pokeTarget.displayName, msg);
+      });
+    });
+    var pokeClose = document.getElementById("poke-picker-close");
+    if (pokeClose)
+      pokeClose.addEventListener("click", function () {
+        state.pokeTarget = null;
+        render();
+      });
+    var pokeBackdrop = document.getElementById("poke-picker-backdrop");
+    if (pokeBackdrop)
+      pokeBackdrop.addEventListener("click", function (e) {
+        if (e.target === pokeBackdrop) {
+          state.pokeTarget = null;
+          render();
+        }
       });
   }
 
