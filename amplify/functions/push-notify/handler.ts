@@ -10,6 +10,12 @@ import webpush from 'web-push';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:example@example.com';
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+// 這支 function 現在同時監聽三張表的異動（好友對戰進度、戳戳、系統公告），
+// 用「這筆事件是從哪個 stream ARN 來的」來判斷資料種類，比用資料欄位長相去猜
+// 更準確，之後再加新的表也不會互相誤判。
+const TEAMSTAT_STREAM_ARN = process.env.TEAMSTAT_STREAM_ARN || '';
+const POKE_STREAM_ARN = process.env.POKE_STREAM_ARN || '';
+const SYSTEMNOTICE_STREAM_ARN = process.env.SYSTEMNOTICE_STREAM_ARN || '';
 
 const ddb = new DynamoDBClient({});
 
@@ -24,8 +30,15 @@ type SubRow = {
   authKey?: string;
 };
 
+// Amplify 的帳號識別碼實際存起來有兩種長相：完整版「sub::username」，或只有
+// 「sub」這一段。不同資料表、不同時期寫入的資料，兩種格式可能混著出現，
+// 直接用完全相等比對常常會比不出來。這裡統一只取 "::" 前面那一段
+// （真正代表這個人的識別碼）來比對，兩種格式都認得出來。
+function subOf(id: string) {
+  return (id || '').split('::')[0];
+}
+
 export const handler: DynamoDBStreamHandler = async (event) => {
-  // 除錯用：只印「有沒有值」，不印金鑰本身內容，避免外洩。
   console.log(
     '[push-notify] 啟動，VAPID_PUBLIC_KEY存在=' +
       !!VAPID_PUBLIC_KEY +
@@ -41,13 +54,14 @@ export const handler: DynamoDBStreamHandler = async (event) => {
     console.error('缺少 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY，還沒設定 Secret 之前無法發送推播。');
     return;
   }
-  // 這個 function 現在同時監聽兩張表的異動：TeamStat（好友對戰進度更新）
-  // 跟 Poke（戳戳）。用 item 上有沒有 toOwnerId/message 這些欄位，來判斷
-  // 這筆是哪一種資料，分別組出不同的通知文字。
-  var notifications: { viewers: string[]; title: string; body: string }[] = [];
+
+  // broadcast=true 代表要發給「所有」有訂閱推播的人（系統公告用），
+  // false 則只發給 viewers 名單裡的人（好友對戰、戳戳用）。
+  var notifications: { viewers: string[]; broadcast: boolean; title: string; body: string }[] = [];
 
   for (const record of event.Records) {
-    console.log('[push-notify] 收到一筆事件，type=' + record.eventName);
+    const arn = record.eventSourceARN || '';
+    console.log('[push-notify] 收到一筆事件，type=' + record.eventName + ' arn=' + arn);
     if (record.eventName !== 'INSERT' && record.eventName !== 'MODIFY') continue;
     const img = record.dynamodb && record.dynamodb.NewImage;
     if (!img) {
@@ -55,36 +69,50 @@ export const handler: DynamoDBStreamHandler = async (event) => {
       continue;
     }
     const item = unmarshall(img as any) as any;
-    const viewers: string[] = Array.isArray(item.viewers) ? item.viewers : [];
-    var isPoke = typeof item.toOwnerId === 'string' && typeof item.message === 'string';
-    console.log(
-      '[push-notify] ' +
-        (isPoke ? '戳戳' : '好友對戰進度') +
-        ' displayName=' +
-        item.displayName +
-        ' viewers數量=' +
-        viewers.length +
-        ' viewers=' +
-        JSON.stringify(viewers)
-    );
-    if (!viewers.length) continue;
-    if (isPoke) {
+
+    if (SYSTEMNOTICE_STREAM_ARN && arn === SYSTEMNOTICE_STREAM_ARN) {
+      console.log('[push-notify] 系統公告 message=' + item.message);
+      if (!item.message) continue;
+      notifications.push({
+        viewers: [],
+        broadcast: true,
+        title: '系統更新通知 🦈',
+        body: item.message,
+      });
+      continue;
+    }
+
+    if (POKE_STREAM_ARN && arn === POKE_STREAM_ARN) {
+      const viewers: string[] = Array.isArray(item.viewers) ? item.viewers : [];
+      console.log('[push-notify] 戳戳 viewers數量=' + viewers.length);
+      if (!viewers.length) continue;
       notifications.push({
         viewers: viewers,
+        broadcast: false,
         title: '有人戳你一下 👉',
         body: (item.fromDisplayName || '隊友') + '：' + item.message,
       });
-    } else {
+      continue;
+    }
+
+    if (TEAMSTAT_STREAM_ARN && arn === TEAMSTAT_STREAM_ARN) {
+      const viewers: string[] = Array.isArray(item.viewers) ? item.viewers : [];
+      console.log('[push-notify] 好友對戰進度 displayName=' + item.displayName + ' viewers數量=' + viewers.length);
+      if (!viewers.length) continue;
       notifications.push({
         viewers: viewers,
+        broadcast: false,
         title: '好友對戰更新 🦈',
         body: (item.displayName || '隊友') + ' 更新了本週的 10-3-1 進度，打開鯊魚日常看看誰領先！',
       });
+      continue;
     }
+
+    console.log('[push-notify] 這筆事件的 stream ARN 不認得，略過。arn=' + arn);
   }
 
   if (!notifications.length) {
-    console.log('[push-notify] 沒有任何一筆資料有 viewers（可能還沒加好友，或這次更新的人沒有好友看得到），結束。');
+    console.log('[push-notify] 沒有任何一筆資料需要發送通知，結束。');
     return;
   }
 
@@ -99,15 +127,6 @@ export const handler: DynamoDBStreamHandler = async (event) => {
   const subs: SubRow[] = (scan.Items || []).map((it) => unmarshall(it) as SubRow);
   console.log('[push-notify] PushSubscription 表裡總共有 ' + subs.length + ' 筆訂閱資料，owner清單=' + JSON.stringify(subs.map((s) => s.owner)));
 
-  // Amplify 的帳號識別碼實際存起來有兩種長相：完整版「sub::username」，或只有
-  // 「sub」這一段。不同資料表、不同時期寫入的資料，兩種格式可能混著出現，
-  // 直接用完全相等比對常常會比不出來（這正是這次通知發不出去的原因）。
-  // 這裡統一只取 "::" 前面那一段（真正代表這個人的識別碼）來比對，
-  // 兩種格式都認得出來。
-  function subOf(id: string) {
-    return (id || '').split('::')[0];
-  }
-
   const sendTasks: Promise<any>[] = [];
   for (const note of notifications) {
     const payload = JSON.stringify({ title: note.title, body: note.body });
@@ -117,7 +136,7 @@ export const handler: DynamoDBStreamHandler = async (event) => {
         console.log('[push-notify] 這筆訂閱資料欄位不完整，略過。owner=' + sub.owner);
         continue;
       }
-      if (viewerSubs.indexOf(subOf(sub.owner)) === -1) {
+      if (!note.broadcast && viewerSubs.indexOf(subOf(sub.owner)) === -1) {
         console.log('[push-notify] ' + sub.owner + ' 不在這筆資料的 viewers 名單裡，不發給他。');
         continue;
       }

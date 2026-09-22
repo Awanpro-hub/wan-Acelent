@@ -67,6 +67,17 @@ const schema = a.schema({
     })
     .authorization((allow) => [allow.owner(), allow.ownersDefinedIn('viewers').to(['read'])]),
 
+  // 系統公告：每次有新版本部署上線，後端建置流程會自動新增一筆。
+  // 這張表任何登入的人都能「讀」，但不能透過一般登入身分「寫」——
+  // 寫入是部署流程用 API Key 呼叫的（見 scripts/publish-system-notice.mjs），
+  // 跟其他表用 Cognito 登入身分寫入不一樣，所以額外開放 publicApiKey 的 create 權限。
+  SystemNotice: a
+    .model({
+      message: a.string().required(),
+      version: a.string(), // 部署識別碼（commit 短碼），方便除錯用，畫面上不會顯示
+    })
+    .authorization((allow) => [allow.authenticated().to(['read']), allow.publicApiKey().to(['create'])]),
+
   // 分類名單裡的一筆聯絡人
   Contact: a
     .model({
@@ -110,5 +121,8 @@ export const data = defineData({
   schema,
   authorizationModes: {
     defaultAuthorizationMode: 'userPool',
+    // 只給 SystemNotice 這張表的自動部署腳本用；有效期一年，到期前記得延長
+    // （在 Amplify Console 重新部署一次就會自動換發新的 key）。
+    apiKeyAuthorizationMode: { expiresInDays: 365 },
   },
 });

@@ -5,6 +5,7 @@ backend:
       commands:
         - npm install --cache .npm --prefer-offline
         - npx ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID
+        - node scripts/publish-system-notice.mjs
 frontend:
   phases:
     preBuild:

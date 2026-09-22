@@ -33,12 +33,18 @@ cfnUserPool.policies = {
 const teamStatTable = backend.data.resources.tables['TeamStat'];
 const pushSubTable = backend.data.resources.tables['PushSubscription'];
 const pokeTable = backend.data.resources.tables['Poke'];
+const systemNoticeTable = backend.data.resources.tables['SystemNotice'];
 // backend.pushNotify.resources.lambda 的 TypeScript 型別是比較籠統的 IFunction，
 // 沒有宣告 addEnvironment 這個方法（雖然實際上底層物件就是一般的 Lambda Function，
 // 一定支援這個方法）。用型別轉換告訴 TypeScript「這其實是一個 Function」即可。
 const pushNotifyLambda = backend.pushNotify.resources.lambda as CdkLambdaFunction;
 
 pushNotifyLambda.addEnvironment('PUSH_SUBSCRIPTION_TABLE_NAME', pushSubTable.tableName);
+// 用 stream ARN 來判斷「這筆事件是哪張表來的」，比用資料欄位長相去猜更準確、
+// 之後再加新的表也不會互相誤判。
+pushNotifyLambda.addEnvironment('TEAMSTAT_STREAM_ARN', teamStatTable.tableStreamArn as string);
+pushNotifyLambda.addEnvironment('POKE_STREAM_ARN', pokeTable.tableStreamArn as string);
+pushNotifyLambda.addEnvironment('SYSTEMNOTICE_STREAM_ARN', systemNoticeTable.tableStreamArn as string);
 
 // 注意：這些建構元都放在「function 自己的 stack」裡（Stack.of(pushNotifyLambda)），
 // 不是放在 data 的 stack 裡。因為上面 addEnvironment 已經讓 function stack
@@ -53,7 +59,11 @@ const streamPolicy = new Policy(functionStack, 'PushNotifyStreamPolicy', {
     new PolicyStatement({
       effect: Effect.ALLOW,
       actions: ['dynamodb:DescribeStream', 'dynamodb:GetRecords', 'dynamodb:GetShardIterator', 'dynamodb:ListStreams'],
-      resources: [teamStatTable.tableStreamArn as string, pokeTable.tableStreamArn as string],
+      resources: [
+        teamStatTable.tableStreamArn as string,
+        pokeTable.tableStreamArn as string,
+        systemNoticeTable.tableStreamArn as string,
+      ],
     }),
   ],
 });
@@ -85,3 +95,13 @@ const pokeStreamMapping = new EventSourceMapping(functionStack, 'PushNotifyPokeS
   startingPosition: StartingPosition.LATEST,
 });
 pokeStreamMapping.node.addDependency(streamPolicy);
+
+// 「系統公告」功能：SystemNotice 表一有新增（每次新版本部署上線都會自動新增一筆，
+// 見 scripts/publish-system-notice.mjs），一樣共用同一支 Lambda 發推播，
+// 但這種通知要發給「所有」有訂閱推播的人，不是只發給 viewers 名單裡的人。
+const systemNoticeStreamMapping = new EventSourceMapping(functionStack, 'PushNotifySystemNoticeStreamMapping', {
+  target: pushNotifyLambda,
+  eventSourceArn: systemNoticeTable.tableStreamArn,
+  startingPosition: StartingPosition.LATEST,
+});
+systemNoticeStreamMapping.node.addDependency(streamPolicy);

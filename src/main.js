@@ -263,6 +263,8 @@ var state = {
   pokes: [], // 我發出過的 + 收到的戳戳（list() 拿回來的原始資料，畫面上再分開處理）
   pokeTarget: null, // { ownerId, displayName } 目前正在挑訊息、準備戳誰
   pokeBusy: false,
+  systemNotices: [], // 系統公告（每次新版本部署上線，後端會自動新增一筆）
+  notifCenterOpen: false, // 通知中心（系統公告＋好友對戰更新＋戳戳，整合成一個列表）是否打開
 };
 var POKE_MESSAGES = [
   "我注意到你了，今天也要加油喔！💪",
@@ -360,6 +362,7 @@ function subscribeAll() {
   // 而是每隔一段時間、或切到好友對戰頁面時主動重新抓一次。
   refreshTeamStats();
   refreshPokes();
+  refreshSystemNotices();
   startTeamStatsPolling();
   unsubs.push(
     client.models.PushSubscription.observeQuery().subscribe({
@@ -529,6 +532,7 @@ function startTeamStatsPolling() {
     if (state.authScreen === "app") {
       refreshTeamStats();
       refreshPokes();
+      refreshSystemNotices();
     }
   }, 30000);
 }
@@ -536,7 +540,9 @@ function stopTeamStatsPolling() {
   clearInterval(_teamStatsPollTimer);
   _teamStatsPollTimer = null;
 }
-function checkBattleNotice() {
+// 通知中心的「未讀」判斷：好友對戰更新、收到的戳戳、系統公告，
+// 三種裡面只要有任何一筆比「上次看過的時間」新，就顯示紅點。
+function latestNotificationTs() {
   var latest = 0;
   state.teamStats.forEach(function (t) {
     if (subOf(t.owner) === subOf(state.myIdentity)) return;
@@ -547,17 +553,91 @@ function checkBattleNotice() {
     var ts = Date.parse(p.createdAt || "") || 0;
     if (ts > latest) latest = ts;
   });
+  state.systemNotices.forEach(function (n) {
+    var ts = Date.parse(n.createdAt || "") || 0;
+    if (ts > latest) latest = ts;
+  });
+  return latest;
+}
+function checkBattleNotice() {
   var lastSeen = 0;
   try {
-    lastSeen = parseInt(localStorage.getItem("battleLastSeen") || "0", 10) || 0;
+    lastSeen = parseInt(localStorage.getItem("notifLastSeen") || "0", 10) || 0;
   } catch (e) {}
-  state.battleNotice = latest > lastSeen;
+  state.battleNotice = latestNotificationTs() > lastSeen;
 }
 function markBattleSeen() {
   state.battleNotice = false;
   try {
-    localStorage.setItem("battleLastSeen", String(Date.now()));
+    localStorage.setItem("notifLastSeen", String(Date.now()));
   } catch (e) {}
+}
+// 通知中心：把系統公告、收到的戳戳、好友對戰更新，依時間合併成一個列表。
+function allNotifications() {
+  var items = [];
+  state.systemNotices.forEach(function (n) {
+    items.push({ kind: "system", id: n.id, icon: "🦈", title: "系統更新", body: n.message || "", time: n.createdAt });
+  });
+  receivedPokes().forEach(function (p) {
+    items.push({
+      kind: "poke",
+      id: p.id,
+      icon: "👉",
+      title: (p.fromDisplayName || "隊友") + " 戳了你一下",
+      body: p.message || "",
+      time: p.createdAt,
+    });
+  });
+  var wk = weekRangeKeys(todayKey());
+  state.friends.forEach(function (f) {
+    var theirStat = state.teamStats.filter(function (t) {
+      return subOf(t.owner) === subOf(f.friendOwnerId) && t.weekKey === wk[0];
+    })[0];
+    if (theirStat && theirStat.updatedAt) {
+      items.push({
+        kind: "battle",
+        id: theirStat.id,
+        icon: "⚔️",
+        title: (f.friendDisplayName || theirStat.displayName || "隊友") + " 更新了本週進度",
+        body: "有效聯絡 " + (theirStat.effectiveContacts || 0) + "・約會 " + (theirStat.appointments || 0) + "・新朋友 " + (theirStat.newPeople || 0),
+        time: theirStat.updatedAt,
+      });
+    }
+  });
+  items.sort(function (a, b) {
+    return (a.time || "") < (b.time || "") ? 1 : -1;
+  });
+  return items.slice(0, 30);
+}
+// 系統公告要另外跳一次 toast 提醒（「僅通知一次」，之後只能在通知中心裡回顧），
+// 用 localStorage 記住「已經跳過提醒的最新一筆 id」，避免每次重新整理都再跳一次。
+// 第一次使用（本機完全沒有紀錄）時，不回頭提醒過去已經發過的公告，只從這之後才提醒。
+function maybeToastSystemNotice(latest) {
+  if (!latest) return;
+  var seenId = "";
+  try {
+    seenId = localStorage.getItem("systemNoticeSeenId") || "";
+  } catch (e) {}
+  if (latest.id === seenId) return;
+  try {
+    localStorage.setItem("systemNoticeSeenId", latest.id);
+  } catch (e) {}
+  if (!seenId) return;
+  showToast(latest.message || "系統已更新，新版本已上線！");
+}
+async function refreshSystemNotices() {
+  try {
+    var res = await client.models.SystemNotice.list();
+    var items = (res.data || []).slice().sort(function (a, b) {
+      return (a.createdAt || "") < (b.createdAt || "") ? 1 : -1;
+    });
+    state.systemNotices = items;
+    maybeToastSystemNotice(items[0]);
+    checkBattleNotice();
+    render();
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 /* ===================== 戳戳 ===================== */
@@ -1698,6 +1778,37 @@ function renderPokePicker() {
     "</div></div></div>"
   );
 }
+function renderNotificationCenter() {
+  if (!state.notifCenterOpen) return "";
+  var items = allNotifications();
+  var listHtml = items.length
+    ? items
+        .map(function (n) {
+          return (
+            '<div class="notif-row"><span class="notif-icon">' +
+            n.icon +
+            '</span><div class="notif-body"><div class="notif-title">' +
+            esc(n.title) +
+            "</div>" +
+            (n.body ? '<div class="notif-text">' + esc(n.body) + "</div>" : "") +
+            '<div class="notif-time">' +
+            fmtRelativeTime(n.time) +
+            "</div></div></div>"
+          );
+        })
+        .join("")
+    : '<div class="empty-hint">目前沒有通知。</div>';
+  return (
+    '<div class="modal-backdrop" id="notif-center-backdrop">' +
+    '<div class="modal-card notif-center-card">' +
+    "<h3>通知中心</h3>" +
+    '<div class="notif-list">' +
+    listHtml +
+    "</div>" +
+    '<div class="modal-actions"><button class="btn btn-ghost btn-sm" id="notif-center-close" type="button">關閉</button></div>' +
+    "</div></div>"
+  );
+}
 function renderBattleView() {
   var wk = weekRangeKeys(todayKey());
   var weekKey = wk[0];
@@ -1825,7 +1936,11 @@ function render() {
     (state.battleNotice ? '<span class="notice-dot"></span>' : "") +
     "</button></nav>" +
     '<div class="spacer"></div>' +
-    '<div class="whoami"><span class="badge-mode live">● 團隊同步中</span><span>你好，<b>' +
+    '<div class="whoami">' +
+    '<button type="button" class="bell-btn" id="notif-bell-btn" title="通知中心">🔔' +
+    (state.battleNotice ? '<span class="notice-dot"></span>' : "") +
+    "</button>" +
+    '<span class="badge-mode live">● 團隊同步中</span><span>你好，<b>' +
     esc(name) +
     '</b></span><button class="btn btn-ghost btn-sm" id="sign-out-btn">登出</button></div></div>' +
     "<main>" +
@@ -1835,6 +1950,7 @@ function render() {
       ? renderBattleView()
       : renderTrackerView()) +
     "</main>" +
+    renderNotificationCenter() +
     '<div class="footer-note">資料儲存在你自己的 AWS 帳號中，只有你看得到，登入後可跨裝置同步。</div>' +
     '<nav class="bottom-nav">' +
     '<button data-view="contacts" class="' +
@@ -1881,6 +1997,28 @@ function wireEvents() {
     });
   });
 
+  var bellBtn = document.getElementById("notif-bell-btn");
+  if (bellBtn)
+    bellBtn.addEventListener("click", function () {
+      state.notifCenterOpen = true;
+      markBattleSeen();
+      render();
+    });
+  var notifClose = document.getElementById("notif-center-close");
+  if (notifClose)
+    notifClose.addEventListener("click", function () {
+      state.notifCenterOpen = false;
+      render();
+    });
+  var notifBackdrop = document.getElementById("notif-center-backdrop");
+  if (notifBackdrop)
+    notifBackdrop.addEventListener("click", function (e) {
+      if (e.target === notifBackdrop) {
+        state.notifCenterOpen = false;
+        render();
+      }
+    });
+
   var so = document.getElementById("sign-out-btn");
   if (so)
     so.addEventListener("click", async function () {
@@ -1896,6 +2034,8 @@ function wireEvents() {
       state.teamStats = [];
       state.pokes = [];
       state.pokeTarget = null;
+      state.systemNotices = [];
+      state.notifCenterOpen = false;
       state.myIdentity = "";
       state.battleNotice = false;
       state.addFriendErr = "";
