@@ -74,18 +74,28 @@ export const handler: DynamoDBStreamHandler = async (event) => {
   const subs: SubRow[] = (scan.Items || []).map((it) => unmarshall(it) as SubRow);
   console.log('[push-notify] PushSubscription 表裡總共有 ' + subs.length + ' 筆訂閱資料，owner清單=' + JSON.stringify(subs.map((s) => s.owner)));
 
+  // Amplify 的帳號識別碼實際存起來有兩種長相：完整版「sub::username」，或只有
+  // 「sub」這一段。不同資料表、不同時期寫入的資料，兩種格式可能混著出現，
+  // 直接用完全相等比對常常會比不出來（這正是這次通知發不出去的原因）。
+  // 這裡統一只取 "::" 前面那一段（真正代表這個人的識別碼）來比對，
+  // 兩種格式都認得出來。
+  function subOf(id: string) {
+    return (id || '').split('::')[0];
+  }
+
   const sendTasks: Promise<any>[] = [];
   for (const stat of teamStatItems) {
     const payload = JSON.stringify({
       title: '好友對戰更新 🦈',
       body: stat.displayName + ' 更新了本週的 10-3-1 進度，打開鯊魚日常看看誰領先！',
     });
+    const viewerSubs = stat.viewers.map(subOf);
     for (const sub of subs) {
       if (!sub.owner || !sub.endpoint || !sub.p256dh || !sub.authKey) {
         console.log('[push-notify] 這筆訂閱資料欄位不完整，略過。owner=' + sub.owner);
         continue;
       }
-      if (stat.viewers.indexOf(sub.owner) === -1) {
+      if (viewerSubs.indexOf(subOf(sub.owner)) === -1) {
         console.log('[push-notify] ' + sub.owner + ' 不在這筆資料的 viewers 名單裡，不發給他。');
         continue;
       }
